@@ -23,7 +23,7 @@ BANS_FILE   = Path("./bans.json")
 SHARES_FILE  = Path("./shares.json")
 VERSION_FILE = Path("./version.json")
 HOST        = "0.0.0.0"
-SESSION_TTL = 60 * 60 * 24  # sesja wazna 24h
+SESSION_TTL = 60 * 60 * 24 * 30  # sesja wazna 30 dni
 ADMIN_USER  = "admin"        # nazwa konta admina
 OWNER_USER  = "whip3kgt"     # nazwa konta ownera
 # ──────────────────────────────────────────────────────
@@ -647,6 +647,8 @@ def get_session(token):
         return None
     s = sessions.get(token)
     if s and s["expires"] > time.time():
+        # Odnów TTL przy każdym żądaniu
+        s["expires"] = time.time() + SESSION_TTL
         return s["username"]
     if s:
         del sessions[token]
@@ -2517,6 +2519,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(b)))
         self.send_header("ngrok-skip-browser-warning", "true")
+        # Odśwież cookie sesji przy każdej odpowiedzi HTML
+        token = get_token_from_request(self)
+        if token and get_session(token):
+            self.send_header("Set-Cookie",
+                f"session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL}")
         self.end_headers()
         self.wfile.write(b)
 
@@ -2539,6 +2546,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             .replace("%%APP_VERSION%%",  (lambda v: f"v{v['version']} {v['stage']}")(load_version()))
         )
         return page
+
+    def refresh_session_cookie(self, token):
+        """Odświeża cookie sesji — wysyła Set-Cookie z nowym Max-Age."""
+        cookie = f"session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL}"
+        self.send_header("Set-Cookie", cookie)
 
     def require_auth(self):
         token    = get_token_from_request(self)
@@ -3810,9 +3822,28 @@ connect();
 class ConsoleHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, fmt, *args): pass
 
+    def _check_console_auth(self):
+        """Zwraca True jeśli request pochodzi od admina/ownera, False w przeciwnym razie."""
+        cookie = self.headers.get("Cookie", "")
+        token = None
+        for part in cookie.split(";"):
+            part = part.strip()
+            if part.startswith("session="):
+                token = part[8:]
+                break
+        username = get_session(token) if token else None
+        return username and (is_admin(username) or is_owner(username))
+
     def do_GET(self):
         p = urllib.parse.urlparse(self.path)
         if p.path == "/ws" and self.headers.get("Upgrade","").lower() == "websocket":
+            if not self._check_console_auth():
+                try:
+                    self.send_response(403)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                except: pass
+                return
             if not ws_handshake(self):
                 return
             with ws_lock:
@@ -3840,6 +3871,8 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             return
 
         if p.path == "/stats":
+            if not self._check_console_auth():
+                self.send_response(403); self.end_headers(); return
             data = json.dumps(get_stats()).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -3850,6 +3883,12 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             return
 
         if p.path in ("/", ""):
+            if not self._check_console_auth():
+                # Przekieruj na stronę logowania głównego serwera
+                self.send_response(302)
+                self.send_header("Location", f"http://localhost:{PORT}/login")
+                self.end_headers()
+                return
             page = (CONSOLE_HTML
                 .replace("PORT_MAIN", str(PORT))
                 .replace("PORT_WS",   str(CONSOLE_PORT))
