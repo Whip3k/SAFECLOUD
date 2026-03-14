@@ -90,7 +90,7 @@ Stałe na początku pliku:
 | `CONSOLE_PORT` | `8081` | Port konsoli WebSocket |
 | `SESSION_TTL` | `30 dni` | Czas ważności sesji |
 | `ADMIN_USER` | `"admin"` | Nazwa konta administratora |
-| `OWNER_USER` | `"whip3kgt"` | Nazwa konta właściciela |
+| `OWNER_USER` | `"..."` | Nazwa konta właściciela |
 | `LOGIN_MAX_ATTEMPTS` | `10` | Max nieudanych logowań z IP w 60s |
 | `RAM_WARN_MB` | `150` | Próg ostrzeżenia RAM |
 | `RAM_CLEAN_MB` | `200` | Próg czyszczenia cache |
