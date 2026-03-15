@@ -5,7 +5,7 @@ Komputer: http://localhost:8080
 Telefon:  http://<twoje-ip>:8080   (ta sama siec Wi-Fi)
 
 Logowanie: kazdy uzytkownik ma swoj wlasny folder w ./SAFE CLOUD/<username>/
-Dane kont sa zapisane w ./users.json (hasla jako hash SHA-256)
+Dane kont sa zapisane w ./users.json (hasla jako PBKDF2-HMAC-SHA256 z sola)
 
 ADMIN: konto 'admin' ma dostep do plikow wszystkich uzytkownikow (./SAFE CLOUD/)
 """
@@ -22,6 +22,7 @@ USERS_FILE  = Path("./users.json")
 BANS_FILE   = Path("./bans.json")
 SHARES_FILE  = Path("./shares.json")
 VERSION_FILE = Path("./version.json")
+MAINTENANCE_FILE = Path("./maintenance.json")
 HOST        = "0.0.0.0"
 SESSION_TTL = 60 * 60 * 24 * 30  # sesja wazna 30 dni
 ADMIN_USER  = "admin"        # nazwa konta admina
@@ -29,6 +30,467 @@ OWNER_USER  = ""             # owner ustawiany przez: set owner <user>
 # ──────────────────────────────────────────────────────
 
 STORAGE_DIR.mkdir(exist_ok=True)
+
+# ── TRYB KONSERWACJI ──────────────────────────────────
+_MAINTENANCE_DEFAULT = {"active": False, "message": "Serwer jest chwilowo niedostepny. Wróc za chwile."}
+
+def _load_maintenance():
+    if MAINTENANCE_FILE.exists():
+        try:
+            return json.loads(MAINTENANCE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return dict(_MAINTENANCE_DEFAULT)
+
+def _save_maintenance(d):
+    MAINTENANCE_FILE.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8")
+
+_maintenance = _load_maintenance()
+
+MAINTENANCE_HTML = """<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>SAFE CLOUD \u2014 Konserwacja</title>
+<link rel="icon" id="dyn-favicon" type="image/svg+xml" href="">
+<script>
+(function(){
+  function makeFavicon(){
+    var svg='<svg viewBox="0 0 38 22" xmlns="http://www.w3.org/2000/svg"><path d="M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z" stroke="#818cf8" stroke-width="1.6" stroke-linejoin="round" fill="rgba(129,140,248,0.12)"/><path d="M11 8.5a3.5 3.5 0 012.2-3.2" stroke="#818cf8" stroke-width="1.1" stroke-linecap="round" opacity=".4"/></svg>';
+    var el=document.getElementById('dyn-favicon');
+    if(el)el.href='data:image/svg+xml,'+encodeURIComponent(svg);
+  }
+  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',makeFavicon);}else{makeFavicon();}
+})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Audiowide&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#09090b;--sur:#18181b;--brd:#27272a;
+  --txt:#e6edf3;--muted:#7d8590;
+  --acc:#e2e8f0;--acc2:#94a3b8;
+  --gr1:rgba(148,163,184,.22);--gr2:rgba(100,116,139,.12);
+  --gr3:rgba(67,56,202,.28);--gr4:rgba(124,58,237,.20);
+}
+body{
+  font-family:'Inter',system-ui,sans-serif;
+  background:var(--bg);color:var(--txt);
+  min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;
+  background-image:none;
+}
+.card{
+  background:var(--sur);border:1px solid var(--brd);border-radius:20px;
+  padding:44px 38px;width:100%;max-width:400px;text-align:center;
+  box-shadow:0 24px 64px rgba(0,0,0,.55);
+  position:relative;z-index:1;
+}
+/* Logo */
+.logo{
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  font-family:'Audiowide',sans-serif;font-size:19px;font-weight:700;
+  letter-spacing:.04em;margin-bottom:6px;
+}
+.lm{width:36px;height:36px;border-radius:9px;overflow:hidden;
+  display:flex;align-items:center;justify-content:center}
+.version{font-size:10px;font-weight:600;letter-spacing:.08em;color:var(--acc2);
+  text-align:center;margin-bottom:32px;font-family:'Inter',sans-serif}
+/* Ikona narzędzi */
+.maint-icon-wrap{
+  width:72px;height:72px;border-radius:20px;margin:0 auto 24px;
+  background:linear-gradient(135deg,rgba(79,70,229,.18),rgba(129,140,248,.10));
+  border:1px solid rgba(129,140,248,.22);
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 0 32px rgba(79,70,229,.15);
+  animation:pulse 3s ease-in-out infinite;
+}
+@keyframes pulse{
+  0%,100%{box-shadow:0 0 24px rgba(79,70,229,.15);}
+  50%{box-shadow:0 0 44px rgba(129,140,248,.32);}
+}
+.maint-icon-wrap svg{animation:spin 8s linear infinite;}
+@keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+/* Tekst */
+h2{font-size:19px;font-weight:700;margin-bottom:10px;letter-spacing:.01em}
+.msg{font-size:14px;color:var(--muted);line-height:1.65;margin-bottom:28px}
+/* Separator */
+.sep{height:1px;background:var(--brd);margin:0 0 22px}
+/* Status bar */
+.status-row{
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  font-size:12px;color:var(--muted);
+}
+.status-dot{
+  width:7px;height:7px;border-radius:50%;background:var(--acc);
+  animation:blink 1.4s ease-in-out infinite;flex-shrink:0;
+}
+@keyframes blink{0%,100%{opacity:1;}50%{opacity:.25;}}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <div class="lm">
+      <svg viewBox="0 0 38 22" width="32" height="19" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z"
+              stroke="var(--acc)" stroke-width="1.6" stroke-linejoin="round"
+              fill="rgba(129,140,248,0.08)"/>
+        <path d="M11 8.5a3.5 3.5 0 012.2-3.2"
+              stroke="var(--acc)" stroke-width="1.1" stroke-linecap="round" opacity=".3"/>
+      </svg>
+    </div>
+    SAFE CLOUD
+  </div>
+  <div class="version">KONSERWACJA</div>
+
+  <div class="maint-icon-wrap">
+    <!-- Ikona kluczy krzyżowych -->
+    <svg viewBox="0 0 24 24" fill="none" stroke="var(--acc)" stroke-width="1.5"
+         stroke-linecap="round" stroke-linejoin="round" width="34" height="34">
+      <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/>
+    </svg>
+  </div>
+
+  <h2>Trwa konserwacja</h2>
+  <p class="msg">%%MSG%%</p>
+
+  <div class="sep"></div>
+
+  <div class="status-row">
+    <div class="status-dot"></div>
+    Wróć za chwilę &mdash; pracujemy nad ulepszeniami
+  </div>
+</div>
+%%BG_ANIM%%
+</body>
+</html>"""
+# ──────────────────────────────────────────────────────
+
+# ── ANIMOWANE TŁO (gwiazdy + fale gradientów) ─────────
+# Wstrzykiwane do każdej strony tuż przed </body>
+BG_ANIMATION_JS = """<canvas id="bg-canvas" style="position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:0"></canvas>
+<style>
+#bg-canvas{opacity:.85;height:100% !important}
+@supports (height:100dvh){#bg-canvas{height:100dvh !important}}
+</style>
+<script>
+(function(){
+  var cv=document.getElementById('bg-canvas');
+  var ctx=cv.getContext('2d');
+  var W,H,stars=[],shooters=[];
+  var gr1c,gr2c,gr3c,accc;
+  var _saveFrame=0;
+
+  function parseRgba(v){
+    v=v.trim();
+    var m=v.match(/rgba?[(]([^)]+)[)]/);
+    if(m){var p=m[1].split(',');return{r:+p[0],g:+p[1],b:+p[2],a:p[3]!=null?+p[3]:1};}
+    return{r:79,g:70,b:229,a:.5};
+  }
+  function hexToRgb(h){
+    h=h.replace('#','');
+    if(h.length===3)h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+    return{r:parseInt(h.slice(0,2),16),g:parseInt(h.slice(2,4),16),b:parseInt(h.slice(4,6),16)};
+  }
+  function readColors(){
+    var s=getComputedStyle(document.documentElement);
+    gr1c=parseRgba(s.getPropertyValue('--gr1')||'rgba(79,70,229,.55)');
+    gr2c=parseRgba(s.getPropertyValue('--gr2')||'rgba(109,40,217,.30)');
+    gr3c=parseRgba(s.getPropertyValue('--gr3')||'rgba(67,56,202,.28)');
+    var acc=s.getPropertyValue('--acc').trim()||'#e2e8f0';
+    accc=hexToRgb(acc);
+  }
+
+  /* ── Zapis / odczyt stanu z sessionStorage ── */
+  var SS_KEY='sc_bg_state';
+  function saveState(){
+    try{
+      var st={
+        t:t,
+        stars:stars.map(function(s){return[
+          Math.round(s.x*10)/10,
+          Math.round(s.y*10)/10,
+          Math.round(s.r*100)/100,
+          Math.round(s.vy*1000)/1000,
+          Math.round(s.tw*1000)/1000,
+          Math.round(s.ts*10000)/10000
+        ];}),
+        ts:Date.now()
+      };
+      sessionStorage.setItem(SS_KEY,JSON.stringify(st));
+    }catch(e){}
+  }
+  function loadState(){
+    try{
+      var raw=sessionStorage.getItem(SS_KEY);
+      if(!raw)return null;
+      var st=JSON.parse(raw);
+      /* Porzuć stan starszy niż 30s — strona mogła się odświeżyć po długiej przerwie */
+      if(Date.now()-st.ts>30000)return null;
+      /* Kompensuj czas który minął między zapisem a odczytem */
+      var elapsed=(Date.now()-st.ts)/1000;
+      st.t+=elapsed*0.011;
+      return st;
+    }catch(e){return null;}
+  }
+
+  /* Stabilny rozmiar — ignoruje znikający pasek przeglądarki na iOS */
+  var _stableW=0,_stableH=0,_resizeTimer=null;
+  function getStableSize(){
+    if(window.visualViewport){
+      return{w:Math.round(window.visualViewport.width),h:Math.round(window.visualViewport.height)};
+    }
+    return{w:window.innerWidth,h:window.innerHeight};
+  }
+  function resize(){
+    var sz=getStableSize();
+    if(sz.w===_stableW && Math.abs(sz.h-_stableH)<120) return;
+    _stableW=sz.w; _stableH=sz.h;
+    W=cv.width=_stableW;
+    H=cv.height=_stableH;
+    initStars();
+  }
+  function debouncedResize(){
+    clearTimeout(_resizeTimer);
+    _resizeTimer=setTimeout(resize,150);
+  }
+
+  function initStars(savedStars){
+    stars=[];
+    var n=Math.round(W*H/10000);n=Math.max(50,Math.min(180,n));
+    if(savedStars&&savedStars.length===n){
+      /* Odtwórz zapisane gwiazdy — skaluj pozycje do aktualnego rozmiaru ekranu */
+      var savedW=savedStars.reduce(function(mx,s){return Math.max(mx,s[0]);},0)||W;
+      var savedH=savedStars.reduce(function(mx,s){return Math.max(mx,s[1]);},0)||H;
+      var sx=W/Math.max(savedW,1), sy=H/Math.max(savedH,1);
+      for(var i=0;i<n;i++){
+        var s=savedStars[i];
+        stars.push({x:s[0]*sx,y:s[1]*sy,r:s[2],vy:s[3],tw:s[4],ts:s[5]});
+      }
+    } else {
+      for(var i=0;i<n;i++){
+        stars.push({
+          x:Math.random()*W, y:Math.random()*H,
+          r:Math.random()*1.5+.3,
+          vy:Math.random()*.12+.03,
+          tw:Math.random()*Math.PI*2,
+          ts:Math.random()*.03+.008
+        });
+      }
+    }
+  }
+
+  function spawnShooter(){
+    if(shooters.length<3&&Math.random()<.004){
+      shooters.push({
+        x:Math.random()*W*.6, y:Math.random()*H*.35,
+        vx:2.8+Math.random()*2.2, vy:1.2+Math.random()*1.6,
+        life:1
+      });
+    }
+  }
+
+  var t=0;
+  function frame(){
+    ctx.clearRect(0,0,W,H);
+
+    /* ── fale gradientów ── */
+    var blobs=[
+      {x:W*.3+Math.sin(t*.55)*W*.22, y:H*.15+Math.cos(t*.42)*H*.18, r:W*.7,  c:gr1c},
+      {x:W*.72+Math.cos(t*.48)*W*.18,y:H*.75+Math.sin(t*.65)*H*.22, r:W*.55, c:gr2c},
+      {x:W*.5 +Math.sin(t*.33)*W*.12, y:H*.5+Math.cos(t*.72)*H*.12, r:W*.42, c:gr3c},
+    ];
+    blobs.forEach(function(b){
+      var g=ctx.createRadialGradient(b.x,b.y,0,b.x,b.y,b.r);
+      g.addColorStop(0,'rgba('+b.c.r+','+b.c.g+','+b.c.b+','+(b.c.a*.9)+')');
+      g.addColorStop(1,'rgba('+b.c.r+','+b.c.g+','+b.c.b+',0)');
+      ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    });
+
+    /* ── gwiazdy ── */
+    var isLight=document.documentElement.classList.contains('theme-light');
+    var starColor=isLight?'10,10,20':'230,237,243';
+    var shootColor=isLight?'20,20,60':'255,255,255';
+    stars.forEach(function(s){
+      s.tw+=s.ts;
+      var alpha=(isLight?.15:.25)+Math.sin(s.tw)*(isLight?.10:.22);
+      ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,Math.PI*2);
+      ctx.fillStyle='rgba('+starColor+','+alpha+')';
+      ctx.fill();
+      s.y+=s.vy; if(s.y>H){s.y=-2;s.x=Math.random()*W;}
+    });
+
+    /* ── spadające gwiazdy ── */
+    spawnShooter();
+    for(var i=shooters.length-1;i>=0;i--){
+      var s=shooters[i];
+      var tlen=55;
+      var tx=s.x-s.vx*(tlen/Math.sqrt(s.vx*s.vx+s.vy*s.vy))*1.8;
+      var ty=s.y-s.vy*(tlen/Math.sqrt(s.vx*s.vx+s.vy*s.vy))*1.8;
+      var gsh=ctx.createLinearGradient(tx,ty,s.x,s.y);
+      gsh.addColorStop(0,'rgba('+shootColor+',0)');
+      gsh.addColorStop(1,'rgba('+shootColor+','+(s.life*.75)+')');
+      ctx.beginPath(); ctx.moveTo(tx,ty); ctx.lineTo(s.x,s.y);
+      ctx.strokeStyle=gsh; ctx.lineWidth=1.4; ctx.stroke();
+      ctx.beginPath(); ctx.arc(s.x,s.y,1.8,0,Math.PI*2);
+      ctx.fillStyle='rgba('+shootColor+','+s.life+')'; ctx.fill();
+      s.x+=s.vx; s.y+=s.vy; s.life-=.016;
+      if(s.life<=0||s.x>W+50||s.y>H+50) shooters.splice(i,1);
+    }
+
+    t+=.011;
+
+    /* Zapisuj stan co ~60 klatek (~1s) */
+    _saveFrame++;
+    if(_saveFrame%30===0) saveState();
+
+    requestAnimationFrame(frame);
+  }
+
+  /* Zapisz stan przed opuszczeniem strony */
+  window.addEventListener('pagehide', saveState);
+  window.addEventListener('beforeunload', saveState);
+
+  /* Init — odtwórz stan jeśli jest */
+  var sz=getStableSize();
+  _stableW=W=cv.width=sz.w;
+  _stableH=H=cv.height=sz.h;
+  readColors();
+  var saved=loadState();
+  if(saved){
+    t=saved.t;
+    initStars(saved.stars);
+  } else {
+    initStars(null);
+  }
+  frame();
+
+  window.addEventListener('resize', debouncedResize);
+  if(window.visualViewport){
+    window.visualViewport.addEventListener('resize', debouncedResize);
+  }
+  new MutationObserver(readColors).observe(document.documentElement,{attributes:true,attributeFilter:['style']});
+
+  /* Upewnij się że karta jest nad canvasem */
+  document.querySelectorAll('.card,.card-wrap,main,.viewer,.topbar').forEach(function(el){
+    if(getComputedStyle(el).position==='static') el.style.position='relative';
+    el.style.zIndex='1';
+  });
+})();
+</script>"""
+# ──────────────────────────────────────────────────────
+import struct, hmac, base64 as _b64, hashlib as _hl, time as _time_mod
+
+TOTP_FILE = Path("./totp.json")
+
+def _totp_load():
+    if TOTP_FILE.exists():
+        try: return json.loads(TOTP_FILE.read_text(encoding="utf-8"))
+        except: pass
+    return {}
+
+def _totp_save(d):
+    TOTP_FILE.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8")
+
+def totp_get_secret(username):
+    return _totp_load().get(username, {}).get("secret")
+
+def totp_is_enabled(username):
+    return bool(_totp_load().get(username, {}).get("enabled"))
+
+def totp_enable(username, secret):
+    d = _totp_load()
+    d[username] = {"secret": secret, "enabled": True}
+    _totp_save(d)
+
+def totp_disable(username):
+    d = _totp_load()
+    if username in d:
+        del d[username]
+        _totp_save(d)
+
+def totp_generate_secret():
+    return _b64.b32encode(secrets.token_bytes(20)).decode()
+
+def totp_get_uri(username, secret):
+    label = urllib.parse.quote(f"SafeCloud:{username}")
+    return f"otpauth://totp/{label}?secret={secret}&issuer=SafeCloud&algorithm=SHA1&digits=6&period=30"
+
+def totp_hotp(secret, counter):
+    try:
+        key = _b64.b32decode(secret.upper())
+    except Exception:
+        return -1
+    msg = struct.pack(">Q", counter)
+    h   = hmac.new(key, msg, _hl.sha1).digest()
+    offset = h[-1] & 0x0f
+    code = struct.unpack(">I", h[offset:offset+4])[0] & 0x7fffffff
+    return code % 1000000
+
+def totp_verify(secret, code, window=1):
+    t = int(_time_mod.time()) // 30
+    for i in range(-window, window + 1):
+        if totp_hotp(secret, t + i) == int(code):
+            return True
+    return False
+
+# Tymczasowe tokeny po poprawnym haśle (oczekiwanie na kod 2FA)
+_totp_pending = {}  # { token: (username, expires) }
+
+def totp_pending_create(username):
+    token = secrets.token_hex(24)
+    _totp_pending[token] = (username, time.time() + 300)  # 5 min
+    return token
+
+def totp_pending_get(token):
+    entry = _totp_pending.get(token)
+    if not entry: return None
+    username, exp = entry
+    if time.time() > exp:
+        del _totp_pending[token]
+        return None
+    return username
+
+def totp_pending_del(token):
+    _totp_pending.pop(token, None)
+
+# ── AUTO BACKUP ───────────────────────────────────────
+BACKUP_DIR      = Path("./backups")
+BACKUP_MAX_KEEP = 3
+BACKUP_INTERVAL = 60 * 60 * 24  # 24h
+
+def auto_backup_run():
+    """Tworzy ZIP backup folderu SAFE CLOUD. Zachowuje max BACKUP_MAX_KEEP plików."""
+    import zipfile as _zf
+    BACKUP_DIR.mkdir(exist_ok=True)
+    ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out = BACKUP_DIR / f"backup_{ts}.zip"
+    count = 0
+    try:
+        with _zf.ZipFile(out, "w", _zf.ZIP_DEFLATED) as zf:
+            for fp in STORAGE_DIR.rglob("*"):
+                if fp.is_file():
+                    zf.write(fp, fp.relative_to(STORAGE_DIR.parent))
+                    count += 1
+        size = human_size(out.stat().st_size)
+        print(f"[BACKUP] ✓ Zapisano: {out.name} ({count} plików, {size})")
+        # Usuń stare backupy
+        all_backups = sorted(BACKUP_DIR.glob("backup_*.zip"), key=lambda x: x.stat().st_mtime)
+        while len(all_backups) > BACKUP_MAX_KEEP:
+            old = all_backups.pop(0)
+            old.unlink()
+            print(f"[BACKUP] Usunięto stary backup: {old.name}")
+    except Exception as e:
+        print(f"[BACKUP] ✗ Błąd: {e}")
+
+def auto_backup_loop():
+    """Co BACKUP_INTERVAL sekund tworzy backup."""
+    while True:
+        time.sleep(BACKUP_INTERVAL)
+        auto_backup_run()
+
 
 def load_users():
     """
@@ -127,12 +589,36 @@ def get_ban(username):
         return None
     return b
 
-def hash_password(pw):
-    return hashlib.sha256(pw.encode()).hexdigest()
+def hash_password(pw, salt=None):
+    """
+    Hashuje hasło używając PBKDF2-HMAC-SHA256 z losową solą.
+    Zwraca string w formacie: pbkdf2$<sól_hex>$<hash_hex>
+    Jeśli podano salt (hex), używa go — tylko przy weryfikacji migracji (nie używaj zewnętrznie).
+    """
+    if salt is None:
+        salt = secrets.token_hex(32)
+    dk = hashlib.pbkdf2_hmac("sha256", pw.encode("utf-8"), salt.encode("utf-8"), 260_000)
+    return f"pbkdf2${salt}${dk.hex()}"
+
+def verify_password(pw, stored):
+    """
+    Weryfikuje hasło. Obsługuje stary format SHA-256 (legacy) i nowy PBKDF2.
+    Przy starym formacie zwraca (True, new_hash) sygnalizując potrzebę migracji.
+    """
+    if stored.startswith("pbkdf2$"):
+        try:
+            _, salt, _ = stored.split("$")
+        except ValueError:
+            return False, None
+        return hash_password(pw, salt) == stored, None
+    # Stary format SHA-256 — weryfikacja i sygnał do migracji
+    if hashlib.sha256(pw.encode()).hexdigest() == stored:
+        return True, hash_password(pw)  # zwraca nowy hash do nadpisania
+    return False, None
 
 def generate_admin_password():
     charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%&*"
-    return "".join(secrets.choice(charset) for _ in range(5))
+    return "".join(secrets.choice(charset) for _ in range(16))
 
 def ensure_admin():
     new_pass = generate_admin_password()
@@ -242,6 +728,8 @@ def handle_command(cmd, caller=""):
     # --ver
     if c == "--ver":
         if len(parts) >= 3 and parts[1].lower() == "set":
+            if is_moderator(caller):
+                return "[CMD] ✗ Brak uprawnień."
             # --ver set <wersja> [stage]
             ver = parts[2]
             # walidacja formatu x.y.z
@@ -322,6 +810,8 @@ def handle_command(cmd, caller=""):
 
     # add role <user> <role_name> <hex_color>
     if c == "add" and len(parts) >= 2 and parts[1].lower() == "role":
+        if is_moderator(caller):
+            return "[CMD] ✗ Brak uprawnień."
         if len(parts) < 5:
             return "[CMD] ✗ Użycie: add role <user> <nazwa_roli> <kolor_hex>  np: add role janek VIP #ff6600"
         user  = parts[2]
@@ -336,6 +826,8 @@ def handle_command(cmd, caller=""):
 
     # remove role <user>
     if c == "remove" and len(parts) >= 2 and parts[1].lower() == "role":
+        if is_moderator(caller):
+            return "[CMD] ✗ Brak uprawnień."
         if len(parts) < 3:
             return "[CMD] ✗ Użycie: remove role <user>"
         user = parts[2]
@@ -360,6 +852,8 @@ def handle_command(cmd, caller=""):
 
     # add mod <user>
     if c == "add" and len(parts) >= 2 and parts[1].lower() == "mod":
+        if is_moderator(caller):
+            return "[CMD] ✗ Brak uprawnień."
         if len(parts) < 3:
             return "[CMD] ✗ Użycie: add mod <user>"
         user = parts[2]
@@ -378,6 +872,8 @@ def handle_command(cmd, caller=""):
 
     # remove mod <user>
     if c == "remove" and len(parts) >= 2 and parts[1].lower() == "mod":
+        if is_moderator(caller):
+            return "[CMD] ✗ Brak uprawnień."
         if len(parts) < 3:
             return "[CMD] ✗ Użycie: remove mod <user>"
         user = parts[2]
@@ -424,10 +920,20 @@ def handle_command(cmd, caller=""):
             lines.append(f"  {token[:10]}…  |  {s['owner']}  |  {s['name']}  |  {exp}  |  pobrań: {s['downloads']}")
         return "\n".join(lines)
 
-    # revoke <token>
+    # revoke <token> | revoke all
     if c == "revoke":
         if len(parts) < 2:
-            return "[CMD] ✗ Użycie: revoke <token>"
+            return "[CMD] ✗ Użycie: revoke <token>  lub  revoke all"
+        if parts[1].lower() == "all":
+            if is_moderator(caller):
+                return "[CMD] ✗ Brak uprawnień."
+            all_shares = load_shares()
+            count = len(all_shares)
+            if not count:
+                return "[CMD] ~ Brak aktywnych linków do usunięcia."
+            save_shares({})
+            print(f"[SHARE] Wszystkie linki ({count}) usunięte przez {caller}.")
+            return f"[CMD] ✓ Usunięto wszystkie {count} aktywnych linków udostępniania."
         tok = parts[1]
         all_shares = load_shares()
         matched = [t for t in all_shares if t == tok or t.startswith(tok)]
@@ -442,6 +948,8 @@ def handle_command(cmd, caller=""):
 
     # deluser <user> [--files]
     if c == "deluser":
+        if is_moderator(caller):
+            return "[CMD] ✗ Brak uprawnień."
         if len(parts) < 2:
             return "[CMD] ✗ Użycie: deluser <user> [--files]"
         user = parts[1]
@@ -548,6 +1056,10 @@ def handle_command(cmd, caller=""):
             f"║{row('Odczyt dysku:', dr):<{w + 2}}║",
             f"║{row('Zapis dysku:', dw):<{w + 2}}║",
             f"║{' ' * w}║",
+            f"╠{'─ INTERNET ':─<{w}}╣",
+            f"║{row('Wysyłanie:', nu):<{w + 2}}║",
+            f"║{row('Pobieranie:', nd):<{w + 2}}║",
+            f"║{' ' * w}║",
             f"╠{'─ CACHE ':─<{w}}╣",
             f"║{row('Miniaturki w cache:', str(cache)):<{w + 2}}║",
             f"║{' ' * w}║",
@@ -558,6 +1070,8 @@ def handle_command(cmd, caller=""):
     # help
     # adminpass
     if c == "adminpass":
+        if not (is_admin(caller) or is_owner(caller)):
+            return "[CMD] ✗ Brak uprawnień."
         return f"[CMD] \U0001f511 Aktualne haslo admina: {_current_admin_pass}"
 
     if c == "help" and len(parts) >= 2 and parts[1].lower() == "mod":
@@ -620,8 +1134,32 @@ def handle_command(cmd, caller=""):
         )
 
     if c == "help":
+        if is_moderator(caller):
+            return (
+                "──────────────────KOMENDY (MOD)──────────────────\n"
+                "[CMD] Dostępne komendy:\n"
+                "  ban <user> <czas> <s/m/h/d> [powód]   – zbanuj na czas\n"
+                "  ban <user> permanent [powód]          – ban permanentny\n"
+                "  unban <user>                          – zdejmij bana\n"
+                "  list bans                             – lista banów\n"
+                "  help ban                              – szczegółowa pomoc o banach\n"
+                "  list users                            – lista użytkowników\n"
+                "  list shares                           – lista aktywnych linków udostępniania\n"
+                "  revoke <token>                        – unieważnij link udostępniania\n"
+                "  list mods                             – lista moderatorów\n"
+                "  list roles                            – lista ról\n"
+                "  disk                                  – zajęte miejsce per użytkownik\n"
+                "  clear logs                            – wyczyść terminal\n"
+                "  ping                                  – sprawdź ping między tobą a serwerem\n"
+                "  stats                                 – szczegółowe statystyki serwera (ramka)\n"
+                "  status                                – krótki stan serwera (RAM, CPU, wątki...)\n"
+                "  --ver                                 – pokaż aktualną wersję aplikacji\n"
+                "  help                                  – ta pomoc\n"
+                "\n"
+                "──────────────────"
+            )
         return (
-            "────────────────────────────────────────────────────KOMENDY────────────────────────────────────────────────────\n"
+            "──────────────────KOMENDY──────────────────\n"
             "[CMD] Dostępne komendy:\n"
             "  adminpass                             – pokaż aktualne hasło admina\n"
             "  ban <user> <czas> <s/m/h/d> [powód]   – zbanuj na czas\n"
@@ -638,6 +1176,7 @@ def handle_command(cmd, caller=""):
             "  list users                            – lista użytkowników\n"
             "  list shares                           – lista aktywnych linków udostępniania\n"
             "  revoke <token>                        – unieważnij link udostępniania\n"
+            "  revoke all                            – usuń wszystkie aktywne linki\n"
             "  deluser <user>                        – usuń konto (pliki zostają)\n"
             "  deluser <user> --files                – usuń konto i wszystkie pliki\n"
             "  passwd <user> <haslo>                 – zmień hasło użytkownika\n"
@@ -645,6 +1184,10 @@ def handle_command(cmd, caller=""):
             "  disk                                  – zajęte miejsce per użytkownik\n"
             "  backup                                – spakuj cały SAFE CLOUD do ZIP\n"
             "  clear logs                            – wyczyść terminal\n"
+            "  maintenance on [msg]                  – włącz tryb konserwacji\n"
+            "  maintenance off                       – wyłącz tryb konserwacji\n"
+            "  maintenance status                    – sprawdź stan konserwacji\n"
+            "  --m on/off/status                     – skrót komendy maintenance\n"
             "  ping                                  – sprawdź ping między tobą a serwerem\n"
             "  ping ngrok                            – sprawdź ping do tunelu ngrok\n"
             "  stats                                 – szczegółowe statystyki serwera (ramka)\n"
@@ -654,7 +1197,7 @@ def handle_command(cmd, caller=""):
             "  --ver set <X.Y.Z> [stage]             – ustaw wersję (stage: alpha/beta/rc/stable)\n"
             "  help                                  – ta pomoc\n"
             "\n" 
-            "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────"
+            "──────────────────"
         )
 
     # set owner <user>
@@ -713,6 +1256,8 @@ def handle_command(cmd, caller=""):
             ocena = f"⚠ Problemy: {', '.join(problems)}"
         dr = s.get('disk_r') or '—'
         dw = s.get('disk_w') or '—'
+        nu = s.get('net_up')   or '—'
+        nd = s.get('net_down') or '—'
         return f"[STATUS] {ocena}"
 
     # ping / ping ngrok
@@ -770,6 +1315,8 @@ def handle_command(cmd, caller=""):
 
     # restart / reset / --r
     if c in ("restart", "reset", "--r"):
+        if is_moderator(caller):
+            return "[CMD] ✗ Brak uprawnień."
         import threading as _th
         def _do_restart():
             time.sleep(0.8)
@@ -796,6 +1343,8 @@ def handle_command(cmd, caller=""):
 
     # passwd <user> <nowe_haslo>
     if c == "passwd":
+        if is_moderator(caller):
+            return "[CMD] ✗ Brak uprawnień."
         if len(parts) < 3:
             return "[CMD] ✗ Użycie: passwd <user> <nowe_haslo>"
         user, new_pass = parts[1], parts[2]
@@ -838,6 +1387,8 @@ def handle_command(cmd, caller=""):
 
     # backup
     if c == "backup":
+        if is_moderator(caller):
+            return "[CMD] ✗ Brak uprawnień."
         import zipfile as _zf, io as _io
         if not STORAGE_DIR.exists():
             return "[CMD] ✗ Katalog SAFE CLOUD nie istnieje."
@@ -858,6 +1409,39 @@ def handle_command(cmd, caller=""):
     # clear logs
     if c == "clear" and len(parts) >= 2 and parts[1].lower() == "logs":
         return "__CLEAR_LOGS__"
+
+    # maintenance on [wiadomość] / maintenance off / maintenance status
+    if c in ("maintenance", "--m"):
+        if is_moderator(caller):
+            return "[CMD] ✗ Brak uprawnień."
+        sub = parts[1].lower() if len(parts) >= 2 else ""
+        if sub == "on":
+            msg = " ".join(parts[2:]) if len(parts) >= 3 else _maintenance["message"]
+            _maintenance["active"] = True
+            _maintenance["message"] = msg
+            _save_maintenance(_maintenance)
+            print(f"[MAINTENANCE] Tryb konserwacji WŁĄCZONY przez {caller}. Wiadomość: {msg}")
+            return f"[CMD] MAINTENANCE Tryb konserwacji WŁĄCZONY.\n[CMD] Wiadomość: {msg}\n[CMD] Dostęp: tylko admin i owner."
+        elif sub == "off":
+            _maintenance["active"] = False
+            _save_maintenance(_maintenance)
+            print(f"[MAINTENANCE] Tryb konserwacji WYŁĄCZONY przez {caller}.")
+            return "[CMD] MAINTENANCE Tryb konserwacji WYŁĄCZONY. Serwer dostępny dla wszystkich."
+        elif sub == "status":
+            st = "WŁĄCZONY" if _maintenance["active"] else "wyłączony"
+            return f"[CMD] Tryb konserwacji: {st}\n[CMD] Wiadomość: {_maintenance['message']}"
+        elif sub == "msg" and len(parts) >= 3:
+            _maintenance["message"] = " ".join(parts[2:])
+            _save_maintenance(_maintenance)
+            return f"[CMD] Wiadomość konserwacji zmieniona na: {_maintenance['message']}"
+        else:
+            return (
+                "[CMD] Użycie:\n"
+                "  maintenance on [wiadomość]  – włącz tryb konserwacji\n"
+                "  maintenance off             – wyłącz tryb konserwacji\n"
+                "  maintenance status          – sprawdź stan\n"
+                "  maintenance msg <tekst>     – zmień wiadomość (bez włączania)"
+            )
 
     return f"[CMD] ✗ Nieznana komenda '{cmd}'. Wpisz 'help' po listę komend."
 
@@ -1060,6 +1644,47 @@ def _thumb_cache_put(key, mtime, data):
         _, (_, evicted) = thumb_cache.popitem(last=False)
         _cache_total_bytes -= len(evicted)
 
+def get_video_thumbnail(path, size=800):
+    """Wyciąga klatkę z wideo przez ffmpeg i zwraca JPEG bytes. Lazy — tylko przy żądaniu."""
+    import subprocess, io
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y", "-ss", "00:00:03",
+                "-i", str(path),
+                "-vframes", "1",
+                "-f", "image2",
+                "-vcodec", "mjpeg",
+                "pipe:1",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+        )
+        if result.returncode != 0 or not result.stdout:
+            # Spróbuj od początku pliku (krótkie wideo)
+            result = subprocess.run(
+                ["ffmpeg", "-y", "-i", str(path), "-vframes", "1",
+                 "-f", "image2", "-vcodec", "mjpeg", "pipe:1"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=15,
+            )
+        if not result.stdout:
+            return None
+        with Image.open(io.BytesIO(result.stdout)) as img:
+            img = img.convert("RGB")
+            img.thumbnail((size, size), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=72, optimize=True)
+            return buf.getvalue()
+    except FileNotFoundError:
+        return None  # ffmpeg nie jest zainstalowany
+    except Exception:
+        return None
+
 def get_thumbnail(path, size=800):
     """Zwraca JPEG miniaturkę jako bytes. Cache LRU po mtime."""
     try:
@@ -1071,6 +1696,14 @@ def get_thumbnail(path, size=800):
             # LRU: przesuń na koniec (najnowszy)
             thumb_cache.move_to_end(key)
             return thumb_cache[key][1]
+
+        # Obsługa plików wideo — lazy, przez ffmpeg
+        video_exts = {".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v", ".flv", ".wmv"}
+        if path.suffix.lower() in video_exts:
+            data = get_video_thumbnail(path, size)
+            if data:
+                _thumb_cache_put(key, mtime, data)
+            return data
 
         # Obsługa plików audio — wyciągnij okładkę
         audio_exts = {".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus", ".oga", ".mp2"}
@@ -1160,8 +1793,11 @@ def build_cards(dir_path, url_path, sort_by="name", sort_dir="asc", search=""):
             meta   = human_size(sz)
             href   = f"/file?path={enc}"
             audio_exts = {".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus", ".oga", ".wav", ".mp2"}
+            video_exts = {".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v", ".flv", ".wmv"}
             if is_image(name):
                 thumb = f'<div class="thumb thumb-img"><img data-src="/thumb?path={enc}" alt="{sname}" class="lazy"></div>'
+            elif Path(name).suffix.lower() in video_exts:
+                thumb = f'<div class="thumb thumb-video"><div class="thumb-video-inner">{icon}<img class="thumb-video-cover lazy" data-src="/thumb?path={enc}" alt="" style="display:none"><div class="thumb-video-play"><svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><circle cx="12" cy="12" r="10" fill="rgba(0,0,0,.55)"/><polygon points="10,8 10,16 17,12" fill="white"/></svg></div></div></div>'
             elif Path(name).suffix.lower() in audio_exts:
                 thumb = f'<div class="thumb thumb-audio" data-src="/thumb?path={enc}"><div class="thumb-audio-inner">{icon}<img class="thumb-audio-cover lazy" data-src="/thumb?path={enc}" alt="" style="display:none"></div></div>'
             else:
@@ -1185,26 +1821,40 @@ AUTH_HTML = r"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>SAFE CLOUD – Logowanie</title>
-<link rel="icon" type="image/svg+xml" href="https://media.lordicon.com/icons/wired/gradient/53-location-pin-on-round-map.svg">
+<link rel="icon" id="dyn-favicon" type="image/svg+xml" href="">
+<script>
+(function(){
+  function makeFavicon(){
+    var acc=getComputedStyle(document.documentElement).getPropertyValue('--acc').trim()||'#e2e8f0';
+    var svg='<svg viewBox="0 0 38 22" xmlns="http://www.w3.org/2000/svg"><path d="M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z" stroke="'+acc+'" stroke-width="1.6" stroke-linejoin="round" fill="'+acc+'22"/><path d="M11 8.5a3.5 3.5 0 012.2-3.2" stroke="'+acc+'" stroke-width="1.1" stroke-linecap="round" opacity=".4"/></svg>';
+    var el=document.getElementById('dyn-favicon');
+    if(el) el.href='data:image/svg+xml,'+encodeURIComponent(svg);
+  }
+  function init(){
+    makeFavicon();
+    new MutationObserver(makeFavicon).observe(document.documentElement,{attributes:true,attributeFilter:['style','class']});
+  }
+  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}
+})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Audiowide&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#0a0c14;--sur:#111827;--brd:#1e2535;
+  --bg:#09090b;--sur:#18181b;--brd:#27272a;
   --txt:#e6edf3;--muted:#7d8590;
-  --acc:#818cf8;--acc2:#4f46e5;--red:#f85149;
+  --acc:#e2e8f0;--acc2:#94a3b8;--red:#f85149;
+  --gr1:rgba(148,163,184,.22);--gr2:rgba(100,116,139,.12);--gr3:rgba(71,85,105,.10);--gr4:rgba(51,65,85,.08);
+  --acc-rgb:129,140,248;
 }
 body{
   font-family:'Inter',system-ui,sans-serif;
   background:var(--bg);color:var(--txt);
   min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;
-  background-image:
-    radial-gradient(ellipse 160% 120% at 50% -10%, rgba(79,70,229,.55)  0%, rgba(109,40,217,.30) 38%, transparent 65%),
-    radial-gradient(ellipse 60%  50% at 90% 100%,  rgba(67,56,202,.28)  0%, transparent 55%),
-    radial-gradient(ellipse 45%  40% at 0%   70%,  rgba(124,58,237,.20) 0%, transparent 50%);
+  background-image:none;
 }
-.card{background:var(--sur);border:1px solid var(--brd);border-radius:16px;padding:36px 32px;width:100%;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.card{background:var(--sur);border:1px solid var(--brd);border-radius:16px;padding:36px 32px;width:100%;max-width:380px;box-shadow:0 20px 60px rgba(0,0,0,.5);position:relative;z-index:1}
 .logo{display:flex;align-items:center;justify-content:center;gap:10px;font-weight:700;font-size:20px;margin-bottom:28px;font-family:'Audiowide',sans-serif;letter-spacing:.04em}
 .lm{width:38px;height:38px;border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center}
 .tabs{display:flex;background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:3px;margin-bottom:24px;gap:3px}
@@ -1216,13 +1866,13 @@ input:focus{border-color:var(--acc)}
 .submit{width:100%;padding:11px;border:none;border-radius:8px;background:var(--acc2);color:#e0e7ff;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;transition:background .15s;margin-top:4px}
 .submit:hover{background:#4338ca}
 .err{background:rgba(248,81,73,.12);border:1px solid rgba(248,81,73,.4);color:var(--red);border-radius:8px;padding:10px 13px;font-size:13px;margin-bottom:14px;display:%%ERR_DISPLAY%%}
-.info{background:rgba(129,140,248,.1);border:1px solid rgba(129,140,248,.3);color:var(--acc);border-radius:8px;padding:10px 13px;font-size:13px;margin-bottom:14px;display:none}
+.info{background:color-mix(in srgb,var(--acc) 10%,transparent);border:1px solid color-mix(in srgb,var(--acc) 30%,transparent);color:var(--acc);border-radius:8px;padding:10px 13px;font-size:13px;margin-bottom:14px;display:none}
 </style>
 </head>
 <body>
 <div class="card">
-  <div class="logo"><div class="lm"><img src="https://media.lordicon.com/icons/wired/gradient/53-location-pin-on-round-map.svg" width="38" height="38" style="object-fit:contain"></div>SAFE CLOUD</div>
-  <div style="text-align:center;margin-top:-18px;margin-bottom:20px;font-size:10px;font-family:'JetBrains Mono',monospace;color:#4a3570;letter-spacing:.04em;font-weight:600">%%APP_VERSION%%</div>
+  <div class="logo"><div class="lm"><svg viewBox="0 0 38 22" width="32" height="19" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z" stroke="var(--acc)" stroke-width="1.6" stroke-linejoin="round" fill="rgba(129,140,248,0.08)"/><path d="M11 8.5a3.5 3.5 0 012.2-3.2" stroke="var(--acc)" stroke-width="1.1" stroke-linecap="round" opacity=".3"/></svg></div>SAFE CLOUD</div>
+  <div style="text-align:center;margin-top:-18px;margin-bottom:20px;font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--acc2);letter-spacing:.04em;font-weight:600">%%APP_VERSION%%</div>
   <div class="tabs">
     <div class="tab %%TAB_LOGIN%%" id="t-login" onclick="switchTab('login')">Logowanie</div>
     <div class="tab %%TAB_REG%%" id="t-reg" onclick="switchTab('reg')">Rejestracja</div>
@@ -1259,6 +1909,7 @@ function switchTab(t){
   document.getElementById('err').style.display='none';
 }
 </script>
+%%BG_ANIM%%
 </body>
 </html>"""
 
@@ -1270,16 +1921,32 @@ MAIN_HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>SAFE CLOUD%%ADMIN_TITLE%%</title>
-<link rel="icon" type="image/svg+xml" href="https://media.lordicon.com/icons/wired/gradient/53-location-pin-on-round-map.svg">
+<link rel="icon" id="dyn-favicon" type="image/svg+xml" href="">
+<script>
+(function(){
+  function makeFavicon(){
+    var acc=getComputedStyle(document.documentElement).getPropertyValue('--acc').trim()||'#e2e8f0';
+    var svg='<svg viewBox="0 0 38 22" xmlns="http://www.w3.org/2000/svg"><path d="M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z" stroke="'+acc+'" stroke-width="1.6" stroke-linejoin="round" fill="'+acc+'22"/><path d="M11 8.5a3.5 3.5 0 012.2-3.2" stroke="'+acc+'" stroke-width="1.1" stroke-linecap="round" opacity=".4"/></svg>';
+    var el=document.getElementById('dyn-favicon');
+    if(el) el.href='data:image/svg+xml,'+encodeURIComponent(svg);
+  }
+  function init(){
+    makeFavicon();
+    new MutationObserver(makeFavicon).observe(document.documentElement,{attributes:true,attributeFilter:['style','class']});
+  }
+  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}
+})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Audiowide&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#0a0c14;--sur:#111827;--brd:#1e2535;
+  --bg:#09090b;--sur:#18181b;--brd:#27272a;
   --txt:#e6edf3;--muted:#7d8590;
-  --acc:#818cf8;--acc2:#4f46e5;
+  --acc:#e2e8f0;--acc2:#94a3b8;--acc-rgb:226,232,240;
   --red:#f85149;--folder:#e3b341;
+  --gr1:rgba(148,163,184,.22);--gr2:rgba(100,116,139,.12);--gr3:rgba(71,85,105,.10);--gr4:rgba(51,65,85,.08);
   --admin:#a78bfa;
   --r:12px;
 }
@@ -1288,36 +1955,33 @@ body{
   background:var(--bg);color:var(--txt);
   min-height:100vh;font-size:14px;
   overflow-y:scroll;scrollbar-width:none;
-  background-image:
-    radial-gradient(ellipse 160% 120% at 50% -10%, rgba(79,70,229,.55)  0%, rgba(109,40,217,.30) 38%, transparent 65%),
-    radial-gradient(ellipse 60%  50% at 90% 100%,  rgba(67,56,202,.28)  0%, transparent 55%),
-    radial-gradient(ellipse 45%  40% at 0%   70%,  rgba(124,58,237,.20) 0%, transparent 50%);
+  background-image:none;
 }
 body::-webkit-scrollbar{display:none}
 html{scrollbar-width:none}
 html::-webkit-scrollbar{display:none}
-header{background:rgba(10,12,20,.82);backdrop-filter:blur(18px);border:1px solid var(--brd);border-radius:10px;position:sticky;top:10px;z-index:50;margin:10px 10px 0;box-shadow:0 4px 24px rgba(0,0,0,.4)}
+header{background:var(--sur);backdrop-filter:blur(18px);border:1px solid var(--brd);border-radius:10px;position:sticky;top:10px;z-index:50;margin:10px 10px 0;box-shadow:0 4px 24px rgba(0,0,0,.4)}
 %%ADMIN_HEADER_STYLE%%
 .hi{padding:0 20px;height:56px;display:flex;align-items:center;justify-content:space-between;gap:16px}
 .logo{display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px;color:var(--txt);text-decoration:none}
-.brand{font-family:'Audiowide',sans-serif;letter-spacing:.04em}
-.lm{width:30px;height:30px;border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center}
+.brand{font-family:'Audiowide',sans-serif;letter-spacing:.04em;line-height:1}
+.lm{width:38px;height:24px;border-radius:0;overflow:visible;display:flex;align-items:center;justify-content:center;background:none!important}
 .lm-admin{background:linear-gradient(135deg,#3730a3,#a78bfa);}
 .hs{display:flex;align-items:center;gap:16px}
 .st{font-size:12px;color:var(--muted)}
 .st b{color:var(--txt);font-weight:500}
 .user-badge{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;color:var(--txt)}
-.avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#3730a3,#818cf8);display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;flex-shrink:0}
-.avatar-admin{background:linear-gradient(135deg,#4c1d95,#a78bfa);}
+.avatar{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,var(--acc2),var(--acc));display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;flex-shrink:0}
+.avatar-admin{background:linear-gradient(135deg,var(--acc2),var(--acc));}
 .avatar-owner{background:linear-gradient(135deg,#92400e,#f59e0b);}
 .admin-badge{font-size:10px;font-weight:700;background:rgba(167,139,250,.15);color:var(--admin);border:1px solid rgba(167,139,250,.35);border-radius:4px;padding:2px 6px;letter-spacing:.05em}
 .owner-badge{font-size:10px;font-weight:700;background:rgba(245,158,11,.15);color:#f59e0b;border:1px solid rgba(245,158,11,.35);border-radius:4px;padding:2px 6px;letter-spacing:.05em}
 .role-badge{font-size:10px;font-weight:700;border:1px solid;border-radius:4px;padding:2px 6px;letter-spacing:.05em}
 .logout-btn{font-size:12px;color:var(--muted);background:none;border:1px solid var(--brd);border-radius:6px;padding:4px 10px;cursor:pointer;font-family:inherit;transition:all .15s}
 .logout-btn:hover{color:var(--red);border-color:#6e3535;background:rgba(248,81,73,.08)}
-.ver-badge{font-size:11px;font-weight:600;font-family:'JetBrains Mono',monospace;color:#4a3570;border-radius:4px;padding:1px 5px;letter-spacing:.04em;line-height:1.4;white-space:nowrap;align-self:center;margin-bottom:0;vertical-align:middle;position:relative;top:1px}
+.ver-badge{font-size:11px;font-weight:600;font-family:'JetBrains Mono',monospace;color:var(--acc2);border-radius:4px;padding:1px 5px;letter-spacing:.04em;line-height:1.4;white-space:nowrap;align-self:center;margin-bottom:0;vertical-align:middle;position:relative;top:1px}
 
-main{max-width:1200px;margin:0 auto;padding:24px 20px}
+main{max-width:1200px;margin:0 auto;padding:24px 20px;position:relative;z-index:1}
 
 .bc{display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:20px;font-size:13px;color:var(--muted)}
 .bc a{color:var(--acc);text-decoration:none;font-weight:500}
@@ -1325,16 +1989,61 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
 .bc span{color:var(--muted)}
 
 .dz{border:1.5px dashed var(--brd);border-radius:var(--r);background:var(--sur);padding:28px 20px;text-align:center;cursor:pointer;transition:border-color .2s,background .2s;margin-bottom:20px}
-.dz:hover,.dz.over{border-color:var(--acc);background:rgba(129,140,248,.06)}
+.dz:hover,.dz.over{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 6%,transparent)}
 .dz-ic{display:flex;align-items:center;justify-content:center;margin-bottom:8px;transition:transform .2s}
 .dz:hover .dz-ic,.dz.over .dz-ic{transform:translateY(-3px)}
 .dz h3{font-size:14px;font-weight:600;margin-bottom:4px}
 .dz p{font-size:12px;color:var(--muted)}
 #fi{display:none}
-.pw{display:none;margin-top:12px}
-.pt{height:4px;background:var(--brd);border-radius:99px;overflow:hidden}
-.pf{height:100%;background:var(--acc);border-radius:99px;transition:width .25s;width:0}
-.pl{font-size:11px;color:var(--muted);margin-top:6px}
+/* ── Upload popup ─────────────────────────────────── */
+#upload-popup{
+  position:fixed;bottom:20px;right:20px;width:320px;
+  background:var(--sur);border:1px solid var(--brd);border-radius:14px;
+  box-shadow:0 8px 32px rgba(0,0,0,.5);z-index:9999;
+  overflow:hidden;transition:box-shadow .2s;
+}
+#upload-popup:hover{box-shadow:0 12px 40px rgba(0,0,0,.6)}
+.upo-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:10px 14px;background:rgba(255,255,255,.03);
+  border-bottom:1px solid var(--brd);cursor:pointer;user-select:none;
+  transition:background .12s;
+}
+.upo-header:hover{background:rgba(255,255,255,.06)}
+.upo-collapsed #upo-chevron{transform:rotate(180deg)}
+.upo-title{font-size:12px;font-weight:600;color:var(--txt);letter-spacing:.02em;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.upo-hbtns{display:flex;align-items:center;gap:4px;flex-shrink:0;margin-left:8px}
+.upo-hbtn{
+  background:none;border:none;cursor:pointer;color:var(--muted);
+  padding:3px;border-radius:5px;display:flex;align-items:center;justify-content:center;
+  transition:background .12s,color .12s;
+}
+.upo-hbtn:hover{background:rgba(255,255,255,.08);color:var(--txt)}
+.pu-cancel{
+  background:none;border:none;cursor:pointer;color:var(--muted);
+  padding:2px;border-radius:4px;display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;transition:color .12s,background .12s;
+}
+.pu-cancel:hover{color:var(--red);background:rgba(248,81,73,.12)}
+.pu-cancel.hidden{visibility:hidden;pointer-events:none}
+.upo-body{transition:max-height .25s ease,opacity .2s;max-height:320px;opacity:1;overflow:hidden}
+.upo-collapsed .upo-body{max-height:0;opacity:0}
+.upo-overall{display:flex;align-items:center;gap:8px;padding:10px 14px 6px}
+.upo-overall-bar{flex:1;height:3px;background:var(--brd);border-radius:99px;overflow:hidden}
+.upo-overall-fill{height:100%;background:var(--acc);border-radius:99px;transition:width .2s;width:0}
+.upo-overall-lbl{font-size:10px;color:var(--muted);white-space:nowrap;flex-shrink:0}
+.upo-list{max-height:220px;overflow-y:auto;padding:0 14px 10px;scrollbar-width:thin;scrollbar-color:var(--brd) transparent}
+.upo-list::-webkit-scrollbar{width:3px}
+.upo-list::-webkit-scrollbar-thumb{background:var(--brd);border-radius:99px}
+.pu-item{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.04)}
+.pu-item:last-child{border-bottom:none}
+.pu-name{font-size:11px;color:var(--txt);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.pu-pct{font-size:10px;color:var(--muted);width:30px;text-align:right;flex-shrink:0}
+.pu-bar-wrap{width:52px;height:3px;background:var(--brd);border-radius:99px;overflow:hidden;flex-shrink:0}
+.pu-bar-fill{height:100%;border-radius:99px;transition:width .2s;width:0;background:var(--acc)}
+.pu-bar-fill.done{background:#3fb950}
+.pu-bar-fill.err{background:var(--red)}
+.pu-status{font-size:11px;width:14px;flex-shrink:0;text-align:center}
 
 .tb{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:10px;flex-wrap:wrap}
 .tbl{display:flex;align-items:center;gap:8px}
@@ -1342,11 +2051,53 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
 .tl{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
 .cnt{font-size:12px;color:var(--muted);background:var(--bg);border:1px solid var(--brd);border-radius:99px;padding:2px 10px}
 .btn{display:inline-flex;align-items:center;gap:6px;font-family:inherit;font-size:13px;font-weight:500;padding:7px 14px;border-radius:8px;cursor:pointer;border:1px solid var(--brd);background:var(--sur);color:var(--txt);transition:background .15s,border-color .15s;text-decoration:none;white-space:nowrap}
-.btn:hover{background:#161d2e;border-color:#2d3a52}
+.btn-accent{background:color-mix(in srgb,var(--acc) 12%,transparent);border-color:color-mix(in srgb,var(--acc) 40%,transparent);color:var(--acc);transition:background .18s,border-color .18s,color .18s,box-shadow .18s,transform .1s}
+.btn-accent:hover{background:color-mix(in srgb,var(--acc) 22%,transparent);border-color:var(--acc);box-shadow:0 0 0 2px color-mix(in srgb,var(--acc) 20%,transparent);transform:translateY(-1px)}
+.btn-accent:active{transform:translateY(0);box-shadow:none}
+.btn:hover{background:color-mix(in srgb,var(--acc) 8%,var(--sur));border-color:var(--acc)}
 .btnp{background:var(--acc2);border-color:var(--acc2);color:#e0e7ff}
 .btnp:hover{background:#4338ca;border-color:#4338ca}
+/* ── Mono theme — wyraźniejsze przyciski ── */
+.theme-mono .btn{border-color:rgba(226,232,240,.25);background:rgba(226,232,240,.06);color:#e2e8f0}
+.theme-mono .btn:hover{background:rgba(226,232,240,.12);border-color:rgba(226,232,240,.5)}
+.theme-mono .btnp{background:#e2e8f0;border-color:#e2e8f0;color:#09090b}
+.theme-mono .btnp:hover{background:#f1f5f9;border-color:#f1f5f9}
+.theme-mono .btn-accent{background:rgba(226,232,240,.1);border-color:rgba(226,232,240,.35);color:#e2e8f0}
+.theme-mono .btn-accent:hover{background:rgba(226,232,240,.18);border-color:#e2e8f0}
+.theme-mono .stab-side:hover{background:rgba(226,232,240,.08)}
+.theme-mono .stab-side.active{background:rgba(226,232,240,.13);color:#e2e8f0}
+.theme-mono .sinput{border-color:rgba(226,232,240,.2)}
+.theme-mono .sinput:focus{border-color:rgba(226,232,240,.6)}
+.theme-mono .submit{background:#e2e8f0;color:#09090b}
+.theme-mono .submit:hover{background:#f1f5f9}
+/* ── Tryb jasny — globalne nadpisania ── */
+.theme-light body{color:var(--txt)}
+.theme-light header{background:var(--sur) !important;border-color:var(--brd)}
+.theme-light .dz{background:var(--sur);border-color:var(--brd)}
+.theme-light .card{background:var(--sur)}
+.theme-light .btn{background:var(--sur);border-color:var(--brd);color:var(--txt)}
+.theme-light .btn:hover{background:color-mix(in srgb,var(--acc) 8%,var(--sur));border-color:var(--acc)}
+.theme-light .btnp{background:var(--acc2);color:#fff;border-color:var(--acc2)}
+.theme-light .sort-btn{background:var(--sur);border-color:var(--brd);color:var(--muted)}
+.theme-light .sort-btn:hover,.theme-light .sort-btn.active{background:color-mix(in srgb,var(--acc) 10%,var(--sur));color:var(--acc);border-color:var(--acc)}
+.theme-light .modal{background:var(--sur)}
+.theme-light .sinput,.theme-light input{background:var(--bg);border-color:var(--brd);color:var(--txt)}
+.theme-light .sinput:focus,.theme-light input:focus{border-color:var(--acc)}
+.theme-light .mb-settings-inner{background:var(--sur)}
+.theme-light .stab-side{color:var(--muted)}
+.theme-light .stab-side:hover{background:color-mix(in srgb,var(--acc) 8%,transparent);color:var(--txt)}
+.theme-light .stab-side.active{background:color-mix(in srgb,var(--acc) 12%,transparent);color:var(--acc)}
+.theme-light .card-info .card-name{color:var(--txt)}
+.theme-light .card-meta{color:var(--muted)}
+.theme-light .submit{background:var(--acc2);color:#fff}
+.theme-light #upload-popup{background:var(--sur);border-color:var(--brd)}
+/* Przełącznik trybu */
+.mode-switch{display:flex;gap:4px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:3px;margin-bottom:16px}
+.mode-btn{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;font-family:inherit;font-size:12px;font-weight:500;padding:6px 8px;border-radius:6px;border:none;background:none;color:var(--muted);cursor:pointer;transition:all .15s}
+.mode-btn:hover{color:var(--txt);background:var(--sur)}
+.mode-btn.active{background:var(--sur);color:var(--txt);box-shadow:0 1px 4px rgba(0,0,0,.2)}
 .sort-btn{font-family:inherit;font-size:12px;font-weight:500;padding:5px 10px;border-radius:7px;cursor:pointer;border:1px solid var(--brd);background:var(--sur);color:var(--muted);transition:all .15s;white-space:nowrap}
-.sort-btn:hover,.sort-btn.active{color:var(--txt);border-color:#2d3a52;background:#161d2e}
+.sort-btn:hover,.sort-btn.active{color:var(--txt);border-color:var(--acc);background:color-mix(in srgb,var(--acc) 8%,var(--sur))}
 .search-wrap{position:relative;display:flex;align-items:center}
 .search-wrap svg{position:absolute;left:9px;color:var(--muted);pointer-events:none}
 .search-inp{font-family:inherit;font-size:13px;padding:6px 10px 6px 30px;border-radius:8px;border:1px solid var(--brd);background:var(--bg);color:var(--txt);outline:none;width:180px;transition:border-color .15s,width .2s}
@@ -1359,13 +2110,13 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
 .card:active{opacity:.85}
 .card-cb{position:absolute;top:6px;left:6px;z-index:10;width:18px;height:18px;border-radius:5px;border:2px solid rgba(255,255,255,.4);background:rgba(0,0,0,.4);cursor:pointer;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .15s}
 .card:hover .card-cb,.card.selected .card-cb{opacity:1}
-.card.selected{border-color:var(--acc);box-shadow:0 0 0 2px rgba(129,140,248,.4)}
+.card.selected{border-color:var(--acc);box-shadow:0 0 0 2px color-mix(in srgb,var(--acc) 40%,transparent)}
 .card.selected .card-cb{background:var(--acc);border-color:var(--acc)}
 .multi-bar{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(80px);background:#1a2035;border:1px solid #2d3a52;border-radius:14px;padding:10px 18px;display:flex;align-items:center;gap:12px;box-shadow:0 8px 32px rgba(0,0,0,.6);z-index:300;transition:transform .25s cubic-bezier(.34,1.56,.64,1);white-space:nowrap}
 .multi-bar.show{transform:translateX(-50%) translateY(0)}
 .multi-cnt{font-size:13px;font-weight:600;color:var(--txt);min-width:80px}
 .multi-btn{font-family:inherit;font-size:12px;font-weight:500;padding:6px 14px;border-radius:8px;cursor:pointer;border:1px solid var(--brd);background:var(--sur);color:var(--txt);transition:all .15s;display:flex;align-items:center;gap:6px}
-.multi-btn:hover{background:#161d2e;border-color:#2d3a52}
+.multi-btn:hover{background:color-mix(in srgb,var(--acc) 8%,var(--sur));border-color:var(--acc)}
 .multi-btn-red{border-color:#6e3535;color:var(--red)}
 .multi-btn-red:hover{background:rgba(248,81,73,.1)}
 .multi-btn-acc{border-color:var(--acc2);color:#c7d2fe;background:rgba(79,70,229,.15)}
@@ -1375,11 +2126,17 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
 .thumb-img{background:var(--bg)}
 .thumb-img img{width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .3s}
 .thumb-img img.loaded{opacity:1}
-.thumb-file{background:rgba(129,140,248,.07);color:#818cf8}
-.thumb-audio{background:rgba(129,140,248,.07);color:#818cf8;position:relative;overflow:hidden}
+.thumb-file{background:color-mix(in srgb,var(--acc) 7%,transparent);color:var(--acc)}
+.thumb-audio{background:color-mix(in srgb,var(--acc) 7%,transparent);color:var(--acc);position:relative;overflow:hidden}
 .thumb-audio-inner{width:100%;height:100%;display:flex;align-items:center;justify-content:center;position:relative}
 .thumb-audio-cover{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .3s}
 .thumb-audio-cover.loaded{opacity:1}
+.thumb-video{background:var(--bg);position:relative;overflow:hidden}
+.thumb-video-inner{width:100%;height:100%;display:flex;align-items:center;justify-content:center;position:relative}
+.thumb-video-cover{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .3s}
+.thumb-video-cover.loaded{opacity:1}
+.thumb-video-play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;opacity:0;transition:opacity .2s}
+.thumb-video-cover.loaded~.thumb-video-play,.card:hover .thumb-video-play{opacity:1}
 .thumb-audio.has-cover .thumb-audio-inner svg{display:none}
 .card-info{padding:10px 10px 11px;border-top:1px solid var(--brd)}
 .card-name{display:block;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:2px}
@@ -1387,13 +2144,13 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
 .card-actions{position:absolute;top:7px;right:7px;display:flex;gap:4px;opacity:0;transition:opacity .15s}
 .card:hover .card-actions{opacity:1}
 .act{width:28px;height:28px;background:rgba(10,12,20,.9);border:1px solid var(--brd);border-radius:7px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--txt);text-decoration:none;transition:background .15s}
-.act:hover{background:#1e2535}
+.act:hover{background:var(--brd)}
 .act-del:hover{color:var(--red);border-color:#6e3535;background:rgba(248,81,73,.1)}
 .share-ttl-btn{font-family:inherit;font-size:12px;font-weight:500;padding:5px 12px;border-radius:7px;cursor:pointer;border:1px solid var(--brd);background:var(--sur);color:var(--muted);transition:all .15s}
 .share-ttl-btn:hover{color:var(--txt);border-color:#2d3a52}
-.share-ttl-btn.active{background:rgba(79,70,229,.2);border-color:#4f46e5;color:#c7d2fe}
+.share-ttl-btn.active{background:color-mix(in srgb,var(--acc) 20%,transparent);border-color:var(--acc2);color:var(--acc)}
 
-.card.drag-over{border-color:var(--acc)!important;box-shadow:0 0 0 2px rgba(129,140,248,.5),0 8px 32px rgba(79,70,229,.3)!important;background:rgba(129,140,248,.1)!important}
+.card.drag-over{border-color:var(--acc)!important;box-shadow:0 0 0 2px color-mix(in srgb,var(--acc) 50%,transparent),0 8px 32px color-mix(in srgb,var(--acc) 20%,transparent)!important;background:color-mix(in srgb,var(--acc) 10%,transparent)!important}
 .card.drag-over .thumb{filter:brightness(1.15)}
 .card.dragging-sel{opacity:.28;transform:scale(.95) rotate(-1deg);transition:opacity .2s,transform .2s;filter:saturate(.5)}
 #drag-ghost{pointer-events:none}
@@ -1402,7 +2159,7 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
 .dg-card1{background:rgba(26,32,53,.97);border:1.5px solid #4f46e5;box-shadow:0 8px 32px rgba(79,70,229,.55),0 2px 8px rgba(0,0,0,.4);color:#c7d2fe;top:4px;left:0;width:156px;z-index:3}
 .dg-card2{background:rgba(30,38,64,.9);border:1.5px solid #3730a3;top:0px;left:8px;width:148px;z-index:2;transform:rotate(2.5deg);opacity:.85}
 .dg-card3{background:rgba(35,44,75,.85);border:1.5px solid #312e81;top:-3px;left:14px;width:140px;z-index:1;transform:rotate(5deg);opacity:.65}
-.dg-badge{background:linear-gradient(135deg,#4f46e5,#818cf8);border-radius:99px;min-width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;padding:0 5px;flex-shrink:0}
+.dg-badge{background:linear-gradient(135deg,var(--acc2),var(--acc));border-radius:99px;min-width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;padding:0 5px;flex-shrink:0}
 .dg-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px}
 
 .empty-state{grid-column:1/-1;text-align:center;padding:60px 20px;color:var(--muted)}
@@ -1412,6 +2169,14 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
 .mb{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);backdrop-filter:blur(6px);z-index:200;align-items:center;justify-content:center}
 .mb.show{display:flex}
 .modal{background:var(--sur);border:1px solid var(--brd);border-radius:14px;padding:24px;width:360px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+@media(max-width:520px){
+  #settings-body{flex-direction:column}
+  #settings-sidebar{width:100%!important;flex-direction:row!important;flex-wrap:wrap!important;border-right:none!important;border-bottom:1px solid var(--brd)!important;padding:8px!important;gap:4px!important;flex-shrink:0!important;overflow-x:auto}
+  #settings-sidebar .stab-side{padding:8px 10px!important;font-size:13px!important;flex:1;min-width:fit-content;justify-content:center;white-space:nowrap}
+  #settings-sidebar .stab-side svg{display:none}
+  #settings-sidebar>div[style*="flex:1"]{display:none!important}
+  #settings-sidebar>div[style*="height:1px"]{display:none!important}
+}
 .modal h3{font-size:15px;font-weight:600;margin-bottom:14px}
 .modal input{width:100%;padding:9px 12px;border:1px solid var(--brd);border-radius:8px;font-family:inherit;font-size:14px;color:var(--txt);background:var(--bg);outline:none;margin-bottom:14px;transition:border-color .15s}
 .modal input:focus{border-color:var(--acc)}
@@ -1421,7 +2186,22 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
 .rename-row input{flex:1;padding:9px 12px;border:none;font-family:inherit;font-size:14px;color:var(--txt);background:transparent;outline:none}
 .rename-ext{padding:9px 12px 9px 0;font-size:14px;color:var(--muted);white-space:nowrap;user-select:none}
 
-.toast{position:fixed;bottom:24px;right:20px;left:20px;max-width:340px;margin:0 auto;background:#1e2535;border:1px solid var(--brd);color:var(--txt);border-radius:10px;padding:12px 16px;font-size:13px;font-weight:500;z-index:300;pointer-events:none;transform:translateY(80px);opacity:0;transition:all .3s;display:flex;align-items:center;gap:8px}
+.theme-btn{font-family:inherit;background:var(--sur);border:2px solid var(--brd);border-radius:12px;padding:8px 8px 10px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:8px;transition:border-color .15s,box-shadow .15s,transform .1s;color:var(--muted);font-size:12px;font-weight:500;min-width:0}
+.theme-btn:hover{border-color:var(--acc);transform:scale(1.02);color:var(--txt)}
+.theme-btn.active{border-color:var(--acc);color:var(--txt);box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 35%,transparent);background:color-mix(in srgb,var(--acc) 6%,transparent)}
+.theme-preview{width:100%;height:44px;border-radius:8px}
+@media(max-width:480px){.theme-preview{height:38px}}
+.stab-side{font-family:inherit;font-size:14px;font-weight:500;padding:11px 14px;background:none;border:none;border-radius:9px;color:var(--muted);cursor:pointer;transition:background .15s,color .15s;display:flex;align-items:center;gap:10px;width:100%;text-align:left;-webkit-tap-highlight-color:transparent}
+.stab-side:hover{background:color-mix(in srgb,var(--acc) 8%,transparent);color:var(--txt)}
+.stab-side.active{background:color-mix(in srgb,var(--acc) 13%,transparent);color:var(--txt)}
+.stab-side-red{color:#f87171!important}
+.stab-side-red:hover{background:rgba(248,81,73,.08)!important;color:var(--red)!important}
+.stab-side-red.active{background:rgba(248,81,73,.13)!important;color:var(--red)!important}
+.slabel{display:block;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
+.sinput{width:100%;padding:9px 12px;border:1px solid var(--brd);border-radius:8px;font-family:inherit;font-size:14px;color:var(--txt);background:var(--bg);outline:none;margin-bottom:14px;transition:border-color .15s}
+.sinput:focus{border-color:var(--acc)}
+.serr{font-size:12px;color:var(--red);margin-bottom:10px;display:none}
+.toast{position:fixed;bottom:24px;right:20px;left:20px;max-width:340px;margin:0 auto;background:var(--brd);border:1px solid var(--brd);color:var(--txt);border-radius:10px;padding:12px 16px;font-size:13px;font-weight:500;z-index:300;pointer-events:none;transform:translateY(80px);opacity:0;transition:all .3s;display:flex;align-items:center;gap:8px}
 .toast.show{transform:translateY(0);opacity:1}
 .toast.err{background:rgba(248,81,73,.15);border-color:#6e3535;color:var(--red)}
 
@@ -1430,21 +2210,22 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
 .term-fab{display:none}
 .term-fab-btn{display:none!important}
 .term-header-btn{font-family:inherit;font-size:12px;font-weight:500;padding:6px 12px;border-radius:8px;cursor:pointer;border:1px solid var(--brd);background:var(--sur);color:var(--txt);transition:all .15s;display:flex;align-items:center;gap:6px}
-.term-header-btn:hover{background:#161d2e;border-color:#4f46e5;color:#c7d2fe}
-.term-header-btn.open{background:rgba(79,70,229,.2);border-color:#4f46e5;color:#c7d2fe}
-.term-panel{position:fixed;bottom:20px;right:20px;width:480px;max-width:calc(100vw - 40px);height:380px;background:#0d1117;border:1px solid var(--brd);border-radius:12px;box-shadow:0 16px 64px rgba(0,0,0,.7);z-index:400;display:none;flex-direction:column;overflow:hidden;transform:translateY(20px) scale(.97);opacity:0;pointer-events:none;transition:transform .2s cubic-bezier(.34,1.56,.64,1),opacity .2s}
+.term-header-btn:hover{background:color-mix(in srgb,var(--acc) 10%,var(--sur));border-color:var(--acc2);color:var(--acc)}
+.term-header-btn.open{background:color-mix(in srgb,var(--acc) 20%,transparent);border-color:var(--acc2);color:var(--acc)}
+.term-panel{position:fixed;bottom:20px;right:20px;width:480px;max-width:calc(100vw - 40px);height:380px;background:var(--bg);border:1px solid var(--brd);border-radius:12px;box-shadow:0 16px 64px rgba(0,0,0,.7);z-index:400;display:none;flex-direction:column;overflow:hidden;transform:translateY(20px) scale(.97);opacity:0;pointer-events:none;transition:transform .2s cubic-bezier(.34,1.56,.64,1),opacity .2s}
 .term-panel.open{transform:translateY(0) scale(1);opacity:1;pointer-events:all}
 .term-slider-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--sur);border-bottom:1px solid var(--brd);flex-shrink:0}
 .term-slider-close{background:none;border:none;color:var(--muted);font-size:16px;cursor:pointer;padding:2px 6px;border-radius:4px;line-height:1;transition:color .15s}
 .term-slider-close:hover{color:var(--red)}
 .term-title{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:7px}
 .term-dot{width:7px;height:7px;border-radius:50%}
-.term-out{flex:1;overflow-y:auto;padding:12px 16px;font-family:'JetBrains Mono',monospace;font-size:12.5px;line-height:1.7;color:#7d8590}
+.term-out{flex:1;overflow-y:auto;padding:12px 16px;font-family:'JetBrains Mono',monospace;font-size:12.5px;line-height:1.7;color:#7d8590;scrollbar-width:none}
+.term-out::-webkit-scrollbar{display:none}
 .term-out .tline{padding:1px 0;border-left:2px solid transparent;padding-left:8px}
 .term-out .tline.ok{color:#3fb950;border-left-color:#3fb950}
 .term-out .tline.err{color:#f85149;border-left-color:#f85149}
-.term-out .tline.cmd{color:#818cf8;border-left-color:#818cf8}
-.term-bar{display:flex;align-items:center;gap:8px;padding:10px 16px;border-top:1px solid var(--brd);background:#0a0c14;flex-shrink:0}
+.term-out .tline.cmd{color:var(--acc);border-left-color:var(--acc)}
+.term-bar{display:flex;align-items:center;gap:8px;padding:10px 16px;border-top:1px solid var(--brd);background:var(--bg);flex-shrink:0}
 .term-prefix{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--acc)}
 .term-input{flex:1;font-family:'JetBrains Mono',monospace;font-size:13px;background:transparent;border:none;outline:none;color:var(--txt);caret-color:var(--acc)}
 .term-input::placeholder{color:#2d3a52}
@@ -1452,8 +2233,11 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
 .term-send:hover{background:var(--acc2);border-color:var(--acc2);color:#e0e7ff}
 
 /* ── HAMBURGER MENU ── */
+.user-mini-badge{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:500;color:var(--txt);white-space:nowrap}
+.user-mini-name{font-size:13px;font-weight:600;color:var(--txt)}
+@media(max-width:600px){.user-mini-badge{display:none!important}}
 .ham-btn{display:none;flex-direction:column;justify-content:center;align-items:center;width:40px;height:40px;gap:5px;background:none;border:1px solid var(--brd);border-radius:8px;cursor:pointer;padding:0;transition:background .15s,border-color .15s;flex-shrink:0;-webkit-tap-highlight-color:transparent;touch-action:manipulation;user-select:none}
-.ham-btn:hover{background:#161d2e;border-color:#2d3a52}
+.ham-btn:hover{background:color-mix(in srgb,var(--acc) 8%,var(--sur));border-color:var(--brd)}
 .ham-btn span{display:block;width:16px;height:2px;background:var(--txt);border-radius:2px;transition:transform .25s,opacity .25s,width .25s}
 .ham-btn.open span:nth-child(1){transform:translateY(7px) rotate(45deg)}
 .ham-btn.open span:nth-child(2){opacity:0;width:0}
@@ -1463,16 +2247,16 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
 .mob-menu.open{visibility:visible;pointer-events:all}
 .mob-menu-overlay{position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);z-index:1;-webkit-tap-highlight-color:transparent;opacity:0;transition:opacity .3s ease}
 .mob-menu.open .mob-menu-overlay{opacity:1}
-.mob-menu-panel{position:relative;z-index:2;margin-left:auto;width:min(280px,85vw);height:100%;background:#0d1017;border-left:1px solid var(--brd);box-shadow:-8px 0 40px rgba(0,0,0,.6);transform:translateX(calc(100% + 50px));transition:transform .32s cubic-bezier(.34,1.1,.64,1);display:flex;flex-direction:column;padding:0;flex-shrink:0;overflow:hidden}
+.mob-menu-panel{position:relative;z-index:2;margin-left:auto;width:min(280px,85vw);height:100%;background:var(--bg);border-left:1px solid var(--brd);box-shadow:-8px 0 40px rgba(0,0,0,.6);transform:translateX(calc(100% + 50px));transition:transform .32s cubic-bezier(.34,1.1,.64,1);display:flex;flex-direction:column;padding:0;flex-shrink:0;overflow:hidden}
 .mob-menu.open .mob-menu-panel{transform:translateX(0)}
-.mob-menu-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--brd);user-select:none}
+.mob-menu-head{display:flex;flex-direction:column;border-bottom:1px solid var(--brd);user-select:none}
 .mob-menu-user{display:flex;align-items:center;gap:12px}
 .mob-menu-user-info{display:flex;flex-direction:column;gap:5px}
 .mob-menu-close{width:34px;height:34px;background:none;border:1px solid var(--brd);border-radius:7px;cursor:pointer;color:var(--txt);display:flex;align-items:center;justify-content:center;font-size:16px;transition:background .15s;-webkit-tap-highlight-color:transparent;touch-action:manipulation;flex-shrink:0}
-.mob-menu-close:hover{background:#1e2535}
+.mob-menu-close:hover{background:var(--brd)}
 .mob-menu-body{flex:1;padding:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .mob-menu-item{display:flex;align-items:center;justify-content:center;gap:10px;padding:13px 16px;font-size:15px;font-weight:500;color:var(--txt);text-decoration:none;cursor:pointer;transition:background .15s;border:none;background:none;width:100%;font-family:inherit;text-align:center;user-select:none;-webkit-tap-highlight-color:transparent;touch-action:manipulation;-webkit-user-select:none}
-.mob-menu-item:active{background:rgba(129,140,248,.15)}
+.mob-menu-item:active{background:color-mix(in srgb,var(--acc) 15%,transparent)}
 .mob-menu-item svg{color:var(--muted);flex-shrink:0}
 .mob-menu-sep{height:1px;background:var(--brd);margin:0}
 .mob-menu-stat{padding:10px 16px;font-size:11px;color:var(--muted);user-select:none;text-align:center}
@@ -1491,13 +2275,14 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
   .term-fab{display:none!important}
 }
 @media(min-width:601px){
-  .ham-btn{display:none!important}
-  .mob-menu{visibility:hidden!important;pointer-events:none!important}
+  .ham-btn{display:flex!important}
+  .hs{display:none!important}
 }
 @media(max-width:480px){
   .grid{grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px}
 }
-.sbar{display:flex;align-items:center;gap:0;background:#0a0c14;border-bottom:1px solid var(--brd);padding:0 18px;height:32px;font-size:11px;font-family:'JetBrains Mono',monospace;overflow-x:auto;flex-wrap:nowrap}
+.sbar{display:flex;align-items:center;gap:0;background:var(--bg);border-bottom:1px solid var(--brd);padding:0 18px;height:32px;font-size:11px;font-family:'JetBrains Mono',monospace;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none}
+.sbar::-webkit-scrollbar{display:none}
 .sbar-item{display:flex;align-items:center;gap:5px;padding:0 12px;border-right:1px solid var(--brd);white-space:nowrap;color:var(--muted)}
 .sbar-item:first-child{padding-left:0}
 .sbar-item:last-child{border-right:none}
@@ -1508,14 +2293,41 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
 .sbar-dot{width:6px;height:6px;border-radius:50%;background:#3fb950;flex-shrink:0}
 .sbar-dot.warn{background:#f59e0b}
 .sbar-dot.over{background:#f85149}
+.sbar-lbl{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.04em}
+.sbar-val{color:var(--txt);font-weight:600}
+.sbar-val.warn{color:#f59e0b}
+.sbar-val.over{color:#f85149}
+.sbar-dot{width:6px;height:6px;border-radius:50%;background:#3fb950;flex-shrink:0}
+.sbar-dot.warn{background:#f59e0b}
+.sbar-dot.over{background:#f85149}
 .mob-stats-block{margin:16px 16px 12px;padding:0;text-align:center}
-.mob-stats-block .msb-title{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#3d4a5e;margin-bottom:10px;font-weight:600;text-align:center}
+.mob-stats-block .msb-title{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px;font-weight:600;text-align:center}
 .mob-stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.msb-row{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:8px 6px;background:#0d1117;border-radius:9px;border:1px solid var(--brd)}
-.msb-lbl{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:#3d4a5e}
-.msb-val{font-size:13px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#e2e8f0}
+.msb-row{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:8px 6px;background:var(--bg);border-radius:9px;border:1px solid var(--brd)}
+.msb-lbl{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.msb-val{font-size:13px;font-weight:700;font-family:'JetBrains Mono',monospace;color:var(--txt)}
 .msb-val.warn{color:#f59e0b}
 .msb-val.over{color:#f85149}
+/* Light mode — karty statystyk */
+.theme-light .msb-row{background:var(--sur);border-color:var(--brd)}
+.theme-light .sbar{background:var(--sur)}
+/* Light mode — dodatkowe elementy */
+.theme-light .multi-bar{background:var(--sur);border-color:var(--brd)}
+.theme-light .multi-btn{background:var(--sur);border-color:var(--brd);color:var(--txt)}
+.theme-light .cnt{background:var(--sur);border-color:var(--brd);color:var(--muted)}
+.theme-light .modal{background:var(--sur);border-color:var(--brd)}
+.theme-light .modal input{background:var(--bg)}
+.theme-light .toast{background:var(--sur);color:var(--txt)}
+.theme-light .card{background:var(--sur) !important}
+.theme-light .dz{background:var(--sur) !important}
+.theme-light .term-panel{background:var(--sur)}
+.theme-light .empty-state{color:var(--muted)}
+.theme-light #upload-popup .upo-header{background:rgba(0,0,0,.04)}
+.theme-light .pu-name{color:var(--txt)}
+.theme-light .search-inp{background:var(--bg);color:var(--txt);border-color:var(--brd)}
+.theme-light .mob-menu-panel{background:var(--sur)}
+.theme-light .mob-menu-item{color:var(--txt)}
+.theme-light .mob-menu-item:hover{background:color-mix(in srgb,var(--acc) 8%,transparent)}
 @media(max-width:600px){
   .sbar{height:auto;padding:6px 14px;flex-wrap:wrap;gap:4px 0}
   .sbar-item{padding:2px 10px;border-right:1px solid var(--brd)}
@@ -1525,7 +2337,7 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
 <body>
 <header%%ADMIN_HEADER_ATTR%%>
   <div class="hi">
-    <a class="logo" href="/?path="><div class="lm%%ADMIN_LM%%"><img src="https://media.lordicon.com/icons/wired/gradient/53-location-pin-on-round-map.svg" width="30" height="30" style="object-fit:contain"></div><span class="brand">%%HEADER_TITLE%%</span><span class="ver-badge">%%APP_VERSION%%</span></a>
+    <a class="logo" href="/?path="><svg viewBox="0 0 38 22" width="38" height="22" fill="none" xmlns="http://www.w3.org/2000/svg" style="position:relative;top:3px;flex-shrink:0"><path d="M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z" stroke="var(--acc)" stroke-width="1.6" stroke-linejoin="round" fill="rgba(129,140,248,0.08)"/><path d="M11 8.5a3.5 3.5 0 012.2-3.2" stroke="var(--acc)" stroke-width="1.1" stroke-linecap="round" opacity=".3"/></svg><span class="brand">%%HEADER_TITLE%%</span><span class="ver-badge">%%APP_VERSION%%</span></a>
     <div class="hs">
       <div class="st">Pliki: <b>%%FILE_COUNT%%</b></div>
       <div class="st">Zajęte: <b>%%TOTAL_SIZE%%</b></div>
@@ -1534,15 +2346,19 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
         <span>%%USERNAME%%</span>
         %%ADMIN_BADGE%%
       </div>
-      <form method="POST" action="/logout" style="margin:0">
-        <button class="logout-btn" type="submit">Wyloguj</button>
-      </form>
       %%TERMINAL_BTN%%
     </div>
-    <!-- Hamburger button – only on mobile -->
-    <button class="ham-btn" id="ham-btn" aria-label="Menu">
-      <span></span><span></span><span></span>
-    </button>
+    <!-- Hamburger button + desktop user badge -->
+    <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+      <div class="user-mini-badge">
+        <div class="avatar%%ADMIN_AVATAR%%" style="width:26px;height:26px;font-size:11px">%%USER_INITIAL%%</div>
+        <span class="user-mini-name">%%USERNAME%%</span>
+        %%ADMIN_BADGE%%
+      </div>
+      <button class="ham-btn" id="ham-btn" aria-label="Menu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
   </div>
 </header>
 
@@ -1550,18 +2366,30 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
 <div class="mob-menu" id="mob-menu">
   <div class="mob-menu-overlay" id="mob-overlay" onclick="closeMobMenu()"></div>
   <div class="mob-menu-panel">
-    <div class="mob-menu-head">
-      <div class="mob-menu-user">
-        <div class="avatar%%ADMIN_AVATAR%%">%%USER_INITIAL%%</div>
-        <div class="mob-menu-user-info">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:14px;font-weight:600;line-height:1">%%USERNAME%%</span>%%ADMIN_BADGE%%</div>
+    <div class="mob-menu-head" style="flex-direction:column;align-items:stretch;gap:0;padding:0">
+      <!-- Top bar z X -->
+      <div style="display:flex;align-items:center;justify-content:flex-end;padding:10px 14px 6px">
+        <button class="mob-menu-close" onclick="closeMobMenu()">&#x2715;</button>
+      </div>
+      <!-- Konto -->
+      <div style="display:flex;align-items:center;gap:14px;padding:4px 16px 16px">
+        <div class="avatar%%ADMIN_AVATAR%%" style="width:46px;height:46px;font-size:18px;flex-shrink:0">%%USER_INITIAL%%</div>
+        <div style="min-width:0">
+          <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:4px">
+            <span style="font-size:15px;font-weight:700;color:var(--txt);line-height:1">%%USERNAME%%</span>
+            %%ADMIN_BADGE%%
+          </div>
+          <div style="font-size:11px;color:var(--muted)">Pliki: <b style="color:var(--txt)">%%FILE_COUNT%%</b> &nbsp;·&nbsp; Zajęte: <b style="color:var(--txt)">%%TOTAL_SIZE%%</b></div>
         </div>
       </div>
-      <button class="mob-menu-close" onclick="closeMobMenu()">&#x2715;</button>
     </div>
-    <div class="mob-menu-stat">Pliki: <b>%%FILE_COUNT%%</b> &nbsp;&middot;&nbsp; Zajęte: <b>%%TOTAL_SIZE%%</b></div>
     <div class="mob-menu-sep"></div>
     <div class="mob-menu-body">
+      <button class="mob-menu-item" onclick="closeMobMenu();openSettings()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        Ustawienia konta
+      </button>
+      <div class="mob-menu-sep"></div>
       <a class="mob-menu-item" href="/?path=">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
         Strona główna
@@ -1574,13 +2402,7 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         Prześlij pliki
       </button>
-      <div class="mob-menu-sep"></div>
-      <form method="POST" action="/logout" style="margin:0">
-        <button class="mob-menu-item red" type="submit">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-          Wyloguj
-        </button>
-      </form>
+
       %%MOB_STATS_BLOCK%%
       %%MOB_TERMINAL_ITEM%%
       %%MOB_RESTART_BTN%%
@@ -1598,8 +2420,8 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
       <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" width="36" height="36">
         <defs>
           <linearGradient id="upg" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#818cf8"/>
-            <stop offset="100%" stop-color="#4f46e5"/>
+            <stop offset="0%" stop-color="#e2e8f0" id="upg-stop1"/>
+            <stop offset="100%" stop-color="#94a3b8" id="upg-stop2"/>
           </linearGradient>
         </defs>
         <path d="M12 3L12 15" stroke="url(#upg)" stroke-width="2" stroke-linecap="round"/>
@@ -1613,10 +2435,6 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
       Prześlij folder
     </button>
-    <div class="pw" id="pw">
-      <div class="pt"><div class="pf" id="pf"></div></div>
-      <div class="pl" id="pl"></div>
-    </div>
   </div>
 
   <div class="tb">
@@ -1641,6 +2459,26 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
 
   <div class="grid">%%FILE_CARDS%%</div>
 </main>
+
+<!-- ── Upload Popup ─────────────────────────────────── -->
+<div id="upload-popup" style="display:none">
+  <div class="upo-header" onclick="upoToggle()" title="Zwiń / rozwiń">
+    <span class="upo-title" id="upo-title">Przesyłanie...</span>
+    <div class="upo-hbtns">
+      <svg id="upo-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="13" height="13" style="flex-shrink:0;transition:transform .2s;color:var(--muted)"><polyline points="18 15 12 9 6 15"/></svg>
+      <button class="upo-hbtn" onclick="event.stopPropagation();upoClose()" title="Zamknij" id="upo-close-btn" style="display:none">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="13" height="13"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="upo-body" id="upo-body">
+    <div class="upo-overall">
+      <div class="upo-overall-bar"><div class="upo-overall-fill" id="pf"></div></div>
+      <span class="upo-overall-lbl" id="pl"></span>
+    </div>
+    <div id="pu-list" class="upo-list"></div>
+  </div>
+</div>
 
 <div class="multi-bar" id="multi-bar">
   <span class="multi-cnt" id="multi-cnt">0 zaznaczonych</span>
@@ -1748,11 +2586,416 @@ main{max-width:1200px;margin:0 auto;padding:24px 20px}
   </div>
 </div>
 
+<div class="mb" id="mb-settings" style="display:none" onclick="if(event.target===this)closeSettings()">
+  <div class="modal" style="max-width:540px;width:96vw;max-height:90vh;display:flex;flex-direction:column;padding:0;overflow:hidden">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--brd);display:flex;align-items:center;gap:12px;flex-shrink:0">
+      <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--acc2),var(--acc));display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" width="18" height="18"><circle cx="12" cy="8" r="4"/><path d="M6 20v-2a6 6 0 0112 0v2"/></svg>
+      </div>
+      <div style="flex:1">
+        <div style="font-size:15px;font-weight:600;color:var(--txt)">Ustawienia konta</div>
+        <div style="font-size:12px;color:var(--muted)" id="s-header-user"></div>
+      </div>
+      <button onclick="closeSettings()" style="background:none;border:1px solid var(--brd);border-radius:7px;color:var(--muted);font-size:16px;cursor:pointer;width:32px;height:32px;display:flex;align-items:center;justify-content:center">&times;</button>
+    </div>
+    <div style="display:flex;flex:1;overflow:hidden;min-height:0" id="settings-body">
+      <div style="width:160px;flex-shrink:0;border-right:1px solid var(--brd);padding:10px 8px;display:flex;flex-direction:column;gap:2px;background:var(--bg)" id="settings-sidebar">
+        <button class="stab-side active" id="stab-password" onclick="switchSTab('password')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+          Zmień hasło
+        </button>
+        <button class="stab-side" id="stab-username" onclick="switchSTab('username')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          Zmień nazwę
+        </button>
+        <button class="stab-side" id="stab-2fa" onclick="switchSTab('2fa')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          2FA
+        </button>
+        <button class="stab-side" id="stab-theme" onclick="switchSTab('theme')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 010 20"/><path d="M12 2C6.5 7 6.5 17 12 22"/><path d="M2 12h20"/></svg>
+          Motyw
+        </button>
+        <div style="flex:1;min-height:12px"></div>
+        <div style="height:1px;background:var(--brd);margin:4px 0"></div>
+        <button class="stab-side stab-side-red" id="stab-danger" onclick="switchSTab('danger')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          Wyloguj
+        </button>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:22px 22px 20px">
+        <div id="stab-content-password">
+          <div style="font-size:14px;font-weight:600;color:var(--txt);margin-bottom:4px">Zmień hasło</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:18px">Po zmianie hasła inne aktywne sesje zostaną wylogowane.</div>
+          <label class="slabel">Aktualne hasło</label>
+          <input type="password" id="s-old-pw" class="sinput" placeholder="••••••••">
+          <label class="slabel">Nowe hasło</label>
+          <input type="password" id="s-new-pw" class="sinput" placeholder="min. 4 znaki">
+          <label class="slabel">Powtórz nowe hasło</label>
+          <input type="password" id="s-new-pw2" class="sinput" placeholder="••••••••">
+          <div class="serr" id="s-pw-err"></div>
+          <button class="btn btnp" style="width:100%;gap:8px" onclick="changePassword()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v14a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+            Zmień hasło
+          </button>
+        </div>
+        <div id="stab-content-username" style="display:none">
+          <div style="font-size:14px;font-weight:600;color:var(--txt);margin-bottom:4px">Zmień nazwę użytkownika</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:18px">Folder z plikami zostanie przeniesiony automatycznie. Zostaniesz przelogowany.</div>
+          <label class="slabel">Nowa nazwa</label>
+          <input type="text" id="s-new-name" class="sinput" placeholder="nowa_nazwa" maxlength="32">
+          <label class="slabel">Potwierdź hasłem</label>
+          <input type="password" id="s-name-pw" class="sinput" placeholder="••••••••">
+          <div class="serr" id="s-name-err"></div>
+          <button class="btn btnp" style="width:100%;gap:8px" onclick="changeUsername()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            Zmień nazwę
+          </button>
+        </div>
+        <div id="stab-content-2fa" style="display:none">
+          <div style="font-size:14px;font-weight:600;color:var(--txt);margin-bottom:4px">Uwierzytelnianie dwuskładnikowe</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:18px">Zabezpiecz konto jednorazowymi kodami z Google Authenticator.</div>
+          <div id="s-2fa-inner"><div style="font-size:13px;color:var(--muted)">Ładowanie...</div></div>
+        </div>
+        <div id="stab-content-theme" style="display:none">
+          <div style="font-size:14px;font-weight:600;color:var(--txt);margin-bottom:4px">Motyw kolorystyczny</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:14px">Wybierz kolor akcentu i tryb interfejsu.</div>
+          <div class="mode-switch">
+            <button class="mode-btn active" data-mode="dark" onclick="setMode('dark')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+              Ciemny
+            </button>
+            <button class="mode-btn" data-mode="light" onclick="setMode('light')">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+              Jasny
+            </button>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:10px" id="theme-grid">
+            <button class="theme-btn" data-name="Niebieski" onclick="applyTheme(this)">
+              <div class="theme-preview" style="background:linear-gradient(135deg,#4f46e5,#818cf8)"></div>
+              <span>Niebieski</span>
+            </button>
+            <button class="theme-btn" data-name="Zielony" onclick="applyTheme(this)">
+              <div class="theme-preview" style="background:linear-gradient(135deg,#059669,#34d399)"></div>
+              <span>Zielony</span>
+            </button>
+            <button class="theme-btn" data-name="Czerwony" onclick="applyTheme(this)">
+              <div class="theme-preview" style="background:linear-gradient(135deg,#dc2626,#f87171)"></div>
+              <span>Czerwony</span>
+            </button>
+            <button class="theme-btn" data-name="Fioletowy" onclick="applyTheme(this)">
+              <div class="theme-preview" style="background:linear-gradient(135deg,#9333ea,#c084fc)"></div>
+              <span>Fioletowy</span>
+            </button>
+            <button class="theme-btn" data-name="Mono" onclick="applyTheme(this)">
+              <div class="theme-preview" style="background:linear-gradient(135deg,#18181b,#e2e8f0)"></div>
+              <span>Mono</span>
+            </button>
+            <button class="theme-btn" data-name="Różowy" onclick="applyTheme(this)">
+              <div class="theme-preview" style="background:linear-gradient(135deg,#db2777,#f472b6)"></div>
+              <span>Różowy</span>
+            </button>
+          </div>
+        </div>
+        <div id="stab-content-danger" style="display:none">
+          <div style="font-size:14px;font-weight:600;color:var(--txt);margin-bottom:4px">Wyloguj</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Zakończ bieżącą sesję.</div>
+          <form method="POST" action="/logout" style="margin:0 0 28px">
+            <button class="btn btn-accent" style="width:100%;justify-content:center;">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+              Wyloguj
+            </button>
+          </form>
+          <div style="height:1px;background:var(--brd);margin-bottom:20px"></div>
+          <div style="font-size:14px;font-weight:600;color:var(--red);margin-bottom:4px">Usuń konto</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:16px">Ta operacja jest nieodwracalna.</div>
+          <div style="background:rgba(248,81,73,.07);border:1px solid rgba(248,81,73,.25);border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:12px;color:var(--muted)">
+            ⚠ Twoje konto zostanie trwale usunięte. Możesz wybrać czy usunąć też pliki.
+          </div>
+          <label class="slabel">Potwierdź hasłem</label>
+          <input type="password" id="s-del-pw" class="sinput" placeholder="••••••••">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--txt);margin-bottom:18px;cursor:pointer">
+            <input type="checkbox" id="s-del-files" style="width:auto;margin:0;accent-color:var(--red)"> Usuń też wszystkie moje pliki
+          </label>
+          <div class="serr" id="s-del-err"></div>
+          <button class="btn" style="width:100%;border-color:#7f2a2a;color:var(--red);background:rgba(248,81,73,.08);gap:8px" onclick="deleteAccount()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+            Usuń konto na zawsze
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script>
 const CUR="%%CURRENT_PATH%%";
 let SORT_BY="%%SORT_BY%%", SORT_DIR="%%SORT_DIR%%";
+
+
+// ── MOTYW ────────────────────────────────────────────
+function hexToRgb(hex){
+  const r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);
+  return r+','+g+','+b;
+}
+const THEMES = {
+  'Niebieski':    {
+    dark: {acc:'#818cf8',acc2:'#4f46e5',bg:'#0a0c14',sur:'#111827',brd:'#1e2535',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(79,70,229,.55)',gr2:'rgba(109,40,217,.30)',gr3:'rgba(67,56,202,.28)',gr4:'rgba(124,58,237,.20)'},
+    light:{acc:'#4f46e5',acc2:'#3730a3',bg:'#f0f2ff',sur:'#ffffff',brd:'#dde1f0',txt:'#1a1f36',muted:'#6b7280',gr1:'rgba(79,70,229,.12)',gr2:'rgba(109,40,217,.07)',gr3:'rgba(67,56,202,.06)',gr4:'rgba(124,58,237,.05)'},
+  },
+  'Zielony':      {
+    dark: {acc:'#34d399',acc2:'#059669',bg:'#091410',sur:'#0f1f1a',brd:'#1a3028',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(5,150,105,.50)',gr2:'rgba(4,120,87,.28)',gr3:'rgba(6,95,70,.25)',gr4:'rgba(20,83,45,.18)'},
+    light:{acc:'#059669',acc2:'#047857',bg:'#f0faf6',sur:'#ffffff',brd:'#d1f0e6',txt:'#0f2a1f',muted:'#6b7280',gr1:'rgba(5,150,105,.10)',gr2:'rgba(4,120,87,.06)',gr3:'rgba(6,95,70,.05)',gr4:'rgba(20,83,45,.04)'},
+  },
+  'Czerwony':     {
+    dark: {acc:'#f87171',acc2:'#dc2626',bg:'#110a0a',sur:'#1e1010',brd:'#2e1a1a',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(220,38,38,.50)',gr2:'rgba(185,28,28,.28)',gr3:'rgba(153,27,27,.25)',gr4:'rgba(127,29,29,.18)'},
+    light:{acc:'#dc2626',acc2:'#b91c1c',bg:'#fff0f0',sur:'#ffffff',brd:'#f0d5d5',txt:'#2a0a0a',muted:'#6b7280',gr1:'rgba(220,38,38,.10)',gr2:'rgba(185,28,28,.06)',gr3:'rgba(153,27,27,.05)',gr4:'rgba(127,29,29,.04)'},
+  },
+  'Fioletowy':    {
+    dark: {acc:'#c084fc',acc2:'#9333ea',bg:'#0d0a14',sur:'#180f27',brd:'#2a1a40',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(147,51,234,.55)',gr2:'rgba(126,34,206,.30)',gr3:'rgba(107,33,168,.28)',gr4:'rgba(88,28,135,.20)'},
+    light:{acc:'#9333ea',acc2:'#7c3aed',bg:'#f5f0ff',sur:'#ffffff',brd:'#e2d5f5',txt:'#1a0a2e',muted:'#6b7280',gr1:'rgba(147,51,234,.10)',gr2:'rgba(126,34,206,.06)',gr3:'rgba(107,33,168,.05)',gr4:'rgba(88,28,135,.04)'},
+  },
+  'Mono':          {
+    dark: {acc:'#e2e8f0',acc2:'#94a3b8',bg:'#09090b',sur:'#18181b',brd:'#27272a',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(148,163,184,.22)',gr2:'rgba(100,116,139,.12)',gr3:'rgba(71,85,105,.10)',gr4:'rgba(51,65,85,.08)'},
+    light:{acc:'#334155',acc2:'#1e293b',bg:'#f8fafc',sur:'#ffffff',brd:'#e2e8f0',txt:'#0f172a',muted:'#64748b',gr1:'rgba(148,163,184,.15)',gr2:'rgba(100,116,139,.08)',gr3:'rgba(71,85,105,.06)',gr4:'rgba(51,65,85,.04)'},
+  },
+  'Różowy':       {
+    dark: {acc:'#f472b6',acc2:'#db2777',bg:'#11080d',sur:'#1e0f18',brd:'#2e1a26',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(219,39,119,.50)',gr2:'rgba(190,24,93,.28)',gr3:'rgba(157,23,77,.25)',gr4:'rgba(131,24,67,.18)'},
+    light:{acc:'#db2777',acc2:'#be185d',bg:'#fff0f7',sur:'#ffffff',brd:'#f0d5e8',txt:'#2a0a18',muted:'#6b7280',gr1:'rgba(219,39,119,.10)',gr2:'rgba(190,24,93,.06)',gr3:'rgba(157,23,77,.05)',gr4:'rgba(131,24,67,.04)'},
+  },
+};
+
+let _currentMode = (function(){try{var s=JSON.parse(localStorage.getItem('sc_theme')||'null');return(s&&s.mode)||'dark';}catch(e){return'dark';}}());
+let _currentThemeName = (function(){try{var s=JSON.parse(localStorage.getItem('sc_theme')||'null');return(s&&s.name)||'Mono';}catch(e){return'Mono';}}());
+
+function _applyVars(t, name){
+  const r=document.documentElement;
+  r.style.setProperty('--acc',   t.acc);
+  r.style.setProperty('--acc2',  t.acc2);
+  r.style.setProperty('--acc-rgb', hexToRgb(t.acc));
+  r.style.setProperty('--bg',    t.bg);
+  r.style.setProperty('--sur',   t.sur);
+  r.style.setProperty('--brd',   t.brd);
+  r.style.setProperty('--txt',   t.txt||'#e6edf3');
+  r.style.setProperty('--muted', t.muted||'#7d8590');
+  r.style.setProperty('--gr1',   t.gr1);
+  r.style.setProperty('--gr2',   t.gr2);
+  r.style.setProperty('--gr3',   t.gr3);
+  r.style.setProperty('--gr4',   t.gr4);
+  r.classList.toggle('theme-mono', name==='Mono');
+  r.classList.toggle('theme-light', _currentMode==='light');
+  updateSvgColors(t.acc, t.acc2);
+}
+
+function applyTheme(btn){
+  const name=btn.dataset.name;
+  _currentThemeName=name;
+  const theme=THEMES[name]||THEMES['Mono'];
+  const t=theme[_currentMode]||theme.dark;
+  _applyVars(t, name);
+  localStorage.setItem('sc_theme', JSON.stringify({name, mode:_currentMode}));
+  document.querySelectorAll('.theme-btn').forEach(b=>b.classList.toggle('active', b.dataset.name===name));
+  toast('✓ Motyw: '+name);
+}
+
+function setMode(mode){
+  _currentMode=mode;
+  const theme=THEMES[_currentThemeName]||THEMES['Mono'];
+  const t=theme[mode]||theme.dark;
+  _applyVars(t, _currentThemeName);
+  localStorage.setItem('sc_theme', JSON.stringify({name:_currentThemeName, mode}));
+  // Zaktualizuj przyciski trybu
+  document.querySelectorAll('.mode-btn').forEach(b=>b.classList.toggle('active', b.dataset.mode===mode));
+}
+function updateSvgColors(acc, acc2){
+  const s1=document.getElementById('upg-stop1');
+  const s2=document.getElementById('upg-stop2');
+  if(s1)s1.setAttribute('stop-color',acc);
+  if(s2)s2.setAttribute('stop-color',acc2);
+}
+function loadTheme(){
+  try{
+    const saved=JSON.parse(localStorage.getItem('sc_theme')||'null');
+    if(!saved) return;
+    _currentMode = saved.mode||'dark';
+    _currentThemeName = saved.name||'Mono';
+    const theme=THEMES[_currentThemeName]||THEMES['Mono'];
+    const t=theme[_currentMode]||theme.dark;
+    _applyVars(t, _currentThemeName);
+    document.querySelectorAll('.theme-btn').forEach(b=>{
+      b.classList.toggle('active', b.dataset.name===_currentThemeName);
+    });
+    document.querySelectorAll('.mode-btn').forEach(b=>{
+      b.classList.toggle('active', b.dataset.mode===_currentMode);
+    });
+  }catch(e){}
+}
+loadTheme();
+// ─────────────────────────────────────────────────────
+// ── USTAWIENIA KONTA ─────────────────────────────────
+function openSettings(tab){
+  document.getElementById('mb-settings').style.display='flex';
+  // Ustaw nazwę usera w headerze modala
+  const uname=document.querySelector('.user-mini-name');
+  const hdr=document.getElementById('s-header-user');
+  if(uname&&hdr)hdr.textContent=uname.textContent;
+  switchSTab(tab||'password');
+}
+function closeSettings(){
+  document.getElementById('mb-settings').style.display='none';
+  ['s-old-pw','s-new-pw','s-new-pw2','s-new-name','s-name-pw','s-del-pw'].forEach(id=>{
+    const el=document.getElementById(id);if(el)el.value='';
+  });
+  ['s-pw-err','s-name-err','s-del-err'].forEach(id=>{
+    const el=document.getElementById(id);if(el){el.style.display='none';el.textContent='';}
+  });
+}
+function switchSTab(tab){
+  ['password','username','2fa','theme','danger'].forEach(t=>{
+    document.getElementById('stab-'+t).classList.toggle('active',t===tab);
+    document.getElementById('stab-content-'+t).style.display=t===tab?'block':'none';
+  });
+  if(tab==='2fa') load2FATab();
+  if(tab==='theme') loadTheme();
+}
+async function load2FATab(){
+  const el=document.getElementById('s-2fa-inner');
+  el.innerHTML='<div style="font-size:13px;color:var(--muted)">Ładowanie...</div>';
+  try{
+    const r=await fetch('/2fa/setup');
+    const d=await r.json();
+    if(!d.ok){el.innerHTML='<div style="color:var(--red)">Błąd ładowania</div>';return;}
+    if(d.enabled){
+      el.innerHTML=`
+        <p style="font-size:13px;color:#3fb950;margin-bottom:16px">✓ 2FA jest <b>włączone</b> na Twoim koncie.</p>
+        <label class="slabel">Podaj hasło aby wyłączyć 2FA</label>
+        <input type="password" id="s-2fa-dis-pw" class="sinput" placeholder="••••••••">
+        <div class="serr" id="s-2fa-dis-err"></div>
+        <button class="btn" style="width:100%;border-color:#6e3535;color:var(--red)" onclick="disable2FASettings()">Wyłącz 2FA</button>`;
+    } else {
+      _2fa_secret=d.secret;
+      const qrUrl='https://api.qrserver.com/v1/create-qr-code/?size=160x160&data='+encodeURIComponent(d.uri);
+      el.innerHTML=`
+        <p style="font-size:13px;color:var(--muted);margin-bottom:12px">Zeskanuj kod QR w <b>Google Authenticator</b>, a następnie wpisz kod aby aktywować.</p>
+        <div style="text-align:center;margin:12px 0"><img src="${qrUrl}" width="160" height="160" style="border-radius:8px;background:#fff;padding:6px"></div>
+        <div style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--muted);background:var(--bg);border:1px solid var(--brd);border-radius:8px;padding:8px;margin-bottom:12px;word-break:break-all">${d.secret}</div>
+        <label class="slabel">Kod weryfikacyjny</label>
+        <input type="text" id="s-2fa-code" class="sinput" placeholder="000000" maxlength="6" inputmode="numeric" style="letter-spacing:6px;font-size:18px;text-align:center">
+        <div class="serr" id="s-2fa-err"></div>
+        <button class="btn btnp" style="width:100%" onclick="enable2FASettings()">Włącz 2FA</button>`;
+    }
+  }catch(e){el.innerHTML='<div style="color:var(--red)">Błąd połączenia</div>';}
+}
+async function enable2FASettings(){
+  const code=document.getElementById('s-2fa-code').value.trim();
+  const err=document.getElementById('s-2fa-err');
+  if(code.length!==6){err.textContent='Wpisz 6-cyfrowy kod';err.style.display='block';return;}
+  const r=await fetch('/2fa/setup',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'secret='+encodeURIComponent(_2fa_secret)+'&code='+encodeURIComponent(code)});
+  const d=await r.json();
+  if(d.ok){toast('✓ 2FA włączone!');load2FATab();}
+  else{err.textContent=d.error;err.style.display='block';}
+}
+async function disable2FASettings(){
+  const pw=document.getElementById('s-2fa-dis-pw').value;
+  const err=document.getElementById('s-2fa-dis-err');
+  err.style.display='none';
+  if(!pw){err.textContent='Wpisz hasło';err.style.display='block';return;}
+  const r=await fetch('/2fa/disable',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'password='+encodeURIComponent(pw)});
+  const d=await r.json();
+  if(d.ok){toast('✓ 2FA wyłączone');load2FATab();}
+  else{err.textContent=d.error;err.style.display='block';}
+}
+async function changePassword(){
+  const old=document.getElementById('s-old-pw').value;
+  const np=document.getElementById('s-new-pw').value;
+  const np2=document.getElementById('s-new-pw2').value;
+  const err=document.getElementById('s-pw-err');
+  err.style.display='none';
+  const r=await fetch('/settings/change-password',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'old_password='+encodeURIComponent(old)+'&new_password='+encodeURIComponent(np)+'&new_password2='+encodeURIComponent(np2)});
+  const d=await r.json();
+  if(d.ok){closeSettings();toast('✓ Hasło zmienione');}
+  else{err.textContent=d.error;err.style.display='block';}
+}
+async function changeUsername(){
+  const name=document.getElementById('s-new-name').value.trim();
+  const pw=document.getElementById('s-name-pw').value;
+  const err=document.getElementById('s-name-err');
+  err.style.display='none';
+  const r=await fetch('/settings/change-username',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'new_username='+encodeURIComponent(name)+'&password='+encodeURIComponent(pw)});
+  const d=await r.json();
+  if(d.ok){toast('✓ Nazwa zmieniona — odświeżam...');setTimeout(()=>location.reload(),1000);}
+  else{err.textContent=d.error;err.style.display='block';}
+}
+async function deleteAccount(){
+  const pw=document.getElementById('s-del-pw').value;
+  const del_files=document.getElementById('s-del-files').checked?'1':'0';
+  const err=document.getElementById('s-del-err');
+  err.style.display='none';
+  if(!pw){err.textContent='Wpisz hasło aby potwierdzić.';err.style.display='block';return;}
+  if(!confirm('Na pewno usunąć konto? Tej operacji nie można cofnąć.'))return;
+  try{
+  const r=await fetch('/settings/delete-account',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'password='+encodeURIComponent(pw)+'&delete_files='+del_files});
+  const d=await r.json();
+  if(d.ok){location.href='/login';}
+  else{err.textContent=d.error;err.style.display='block';}
+  }catch{err.textContent='Błąd połączenia.';err.style.display='block';}
+}
+// ────────────────────────────────────────────────────
+// ── 2FA ─────────────────────────────────────────────
+let _2fa_secret = "";
+async function open2FAModal(){
+  document.getElementById('mb-2fa').style.display='flex';
+  document.getElementById('2fa-qr-wrap').innerHTML='<div style="font-size:12px;color:var(--muted)">Ładowanie...</div>';
+  document.getElementById('2fa-secret-display').textContent='';
+  document.getElementById('2fa-err').style.display='none';
+  document.getElementById('2fa-dis-err').style.display='none';
+  document.getElementById('2fa-code-inp').value='';
+  document.getElementById('2fa-disable-pw').value='';
+  try{
+    const r=await fetch('/2fa/setup');
+    const d=await r.json();
+    if(!d.ok){toast('Błąd ładowania 2FA',true);close2FAModal();return;}
+    if(d.enabled){
+      document.getElementById('2fa-setup-view').style.display='none';
+      document.getElementById('2fa-disable-view').style.display='block';
+      document.getElementById('2fa-title').textContent='🔐 Uwierzytelnianie dwuskładnikowe';
+    } else {
+      _2fa_secret=d.secret;
+      document.getElementById('2fa-setup-view').style.display='block';
+      document.getElementById('2fa-disable-view').style.display='none';
+      document.getElementById('2fa-secret-display').textContent='Sekret: '+d.secret;
+      // Generuj QR przez api.qrserver.com
+      const qrUrl='https://api.qrserver.com/v1/create-qr-code/?size=160x160&data='+encodeURIComponent(d.uri);
+      document.getElementById('2fa-qr-wrap').innerHTML=
+        '<img src="'+qrUrl+'" width="160" height="160" style="border-radius:8px;background:#fff;padding:6px" alt="QR Code">'+
+        '<div style="font-size:11px;color:var(--muted);margin-top:6px">Zeskanuj w Google Authenticator</div>';
+    }
+  }catch(e){toast('Błąd połączenia',true);close2FAModal();}
+}
+function close2FAModal(){
+  document.getElementById('mb-2fa').style.display='none';
+  _2fa_secret='';
+}
+async function confirm2FASetup(){
+  const code=document.getElementById('2fa-code-inp').value.trim();
+  if(code.length!==6){document.getElementById('2fa-err').textContent='Wpisz 6-cyfrowy kod';document.getElementById('2fa-err').style.display='block';return;}
+  const r=await fetch('/2fa/setup',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'secret='+encodeURIComponent(_2fa_secret)+'&code='+encodeURIComponent(code)});
+  const d=await r.json();
+  if(d.ok){close2FAModal();toast('✓ 2FA włączone! Przy następnym logowaniu będzie wymagany kod.');}
+  else{document.getElementById('2fa-err').textContent=d.error;document.getElementById('2fa-err').style.display='block';}
+}
+async function disable2FA(){
+  const pw=document.getElementById('2fa-disable-pw').value;
+  const err=document.getElementById('2fa-dis-err');
+  err.style.display='none';
+  if(!pw){err.textContent='Wpisz hasło';err.style.display='block';return;}
+  const r=await fetch('/2fa/disable',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'password='+encodeURIComponent(pw)});
+  const d=await r.json();
+  if(d.ok){close2FAModal();toast('✓ 2FA wyłączone');}
+  else{err.textContent=d.error;err.style.display='block';}
+}
+// ────────────────────────────────────────────────────
 let _t;
 function toast(m,err){const t=document.getElementById("toast");t.textContent=m;t.className="toast show"+(err?" err":"");clearTimeout(_t);_t=setTimeout(()=>t.className="toast",3200)}
 
@@ -1790,14 +3033,48 @@ async function uploadItems(dt){
   }
   upload(dt.files);
 }
+var _upoCollapsed=false;
+function upoToggle(){
+  _upoCollapsed=!_upoCollapsed;
+  const popup=document.getElementById('upload-popup');
+  popup.classList.toggle('upo-collapsed',_upoCollapsed);
+  const ch=document.getElementById('upo-chevron');
+  if(ch)ch.style.transform=_upoCollapsed?'rotate(180deg)':'rotate(0deg)';
+}
+function upoClose(){
+  document.getElementById('upload-popup').style.display='none';
+}
+
 async function upload(files,hasRelPath=false){
   if(!files.length)return;
-  const pw=document.getElementById("pw"),pf=document.getElementById("pf"),pl=document.getElementById("pl");
-  pw.style.display="block";
+  const popup=document.getElementById('upload-popup');
+  const pf=document.getElementById('pf');
+  const pl=document.getElementById('pl');
+  const puList=document.getElementById('pu-list');
+  const upoTitle=document.getElementById('upo-title');
+  const upoCloseBtn=document.getElementById('upo-close-btn');
+
+  popup.style.display='block';
+  popup.classList.remove('upo-collapsed');
+  _upoCollapsed=false;
+  const ch=document.getElementById('upo-chevron');
+  if(ch)ch.style.transform='rotate(0deg)';
+  puList.innerHTML='';
+  pf.style.width='0';
+  pl.textContent='';
+  upoCloseBtn.style.display='none';
+
   const arr=[...files];
   const total=arr.length;
-  let done=0,ok=0,fail=0;
-  const CONCURRENCY=6;
+  let done=0,ok=0,fail=0,cancelled=0;
+  const CONCURRENCY=2;
+
+  function updateTitle(){
+    const left=total-done-cancelled;
+    if(left>0) upoTitle.textContent='Pozostało: '+left+' / '+total;
+    else upoTitle.textContent=(fail||cancelled)?'\u2718 Ukończono z błędami':'\u2714 Przesłano pomyślnie';
+  }
+  updateTitle();
 
   function getFilePath(file){
     const rel=file._relPath||(file.webkitRelativePath||'');
@@ -1807,33 +3084,123 @@ async function upload(files,hasRelPath=false){
     return CUR?(subdir?CUR+'/'+subdir:CUR):(subdir||'');
   }
 
-  async function uploadOne(file){
-    const fd=new FormData();
-    fd.append("path",getFilePath(file));
-    fd.append("file",file);
-    try{
-      const r=await fetch("/upload",{method:"POST",body:fd});
-      const d=await r.json();
-      if(d.ok)ok++;else{fail++;toast("Błąd: "+d.error,true);}
-    }catch{fail++;toast("Błąd sieci",true);}
-    done++;
-    pf.style.width=(done/total*100)+"%";
-    pl.textContent=`${done} / ${total}${fail?' · ✗ '+fail:''}`;
+  // Stwórz wiersz dla każdego pliku z przyciskiem anulowania
+  const rows={};
+  const xhrs={};
+  arr.forEach((file,i)=>{
+    const id='pu-'+i;
+    const row=document.createElement('div');
+    row.className='pu-item';
+    row.innerHTML=
+      `<span class="pu-name" title="${file.name}">${file.name}</span>`+
+      `<span class="pu-status" id="${id}-st"></span>`+
+      `<div class="pu-bar-wrap"><div class="pu-bar-fill" id="${id}-bar"></div></div>`+
+      `<span class="pu-pct" id="${id}-pct">—</span>`+
+      `<button class="pu-cancel" id="${id}-cancel" title="Anuluj" onclick="upoCancel(${i})">` +
+        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="11" height="11"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`+
+      `</button>`;
+    puList.appendChild(row);
+    rows[i]={
+      bar:document.getElementById(id+'-bar'),
+      pct:document.getElementById(id+'-pct'),
+      st:document.getElementById(id+'-st'),
+      cancel:document.getElementById(id+'-cancel'),
+    };
+  });
+
+  window.upoCancel=function(i){
+    if(xhrs[i]){
+      xhrs[i].abort();
+      delete xhrs[i];
+    }
+  };
+
+  function uploadOne(file,i){
+    return new Promise(resolve=>{
+      // Plik mógł być anulowany zanim trafił do kolejki
+      if(rows[i].st.textContent==='\u2298'){resolve();return;}
+
+      const fd=new FormData();
+      fd.append('path',getFilePath(file));
+      fd.append('file',file);
+      const xhr=new XMLHttpRequest();
+      xhrs[i]=xhr;
+
+      xhr.upload.onprogress=e=>{
+        if(!e.lengthComputable)return;
+        const pct=Math.round(e.loaded/e.total*100);
+        rows[i].bar.style.width=pct+'%';
+        rows[i].pct.textContent=pct+'%';
+      };
+      xhr.onload=()=>{
+        delete xhrs[i];
+        rows[i].cancel.classList.add('hidden');
+        try{
+          const d=JSON.parse(xhr.responseText);
+          if(d.ok){
+            ok++;
+            rows[i].bar.classList.add('done');
+            rows[i].bar.style.width='100%';
+            rows[i].pct.textContent='100%';
+            rows[i].st.textContent='\u2714';
+          } else {
+            fail++;
+            rows[i].bar.classList.add('err');
+            rows[i].pct.textContent='';
+            rows[i].st.textContent='\u2718';
+            toast('Błąd: '+d.error,true);
+          }
+        }catch{
+          fail++;
+          rows[i].bar.classList.add('err');
+          rows[i].st.textContent='\u2718';
+        }
+        done++;
+        pf.style.width=(done/total*100)+'%';
+        pl.textContent=done+' / '+total+(fail?' · ✗ '+fail:'');
+        updateTitle();
+        resolve();
+      };
+      xhr.onabort=()=>{
+        delete xhrs[i];
+        cancelled++;
+        rows[i].cancel.classList.add('hidden');
+        rows[i].bar.classList.add('err');
+        rows[i].pct.textContent='';
+        rows[i].st.textContent='\u2298';
+        done++;
+        pf.style.width=(done/total*100)+'%';
+        pl.textContent=done+' / '+total+(fail||cancelled?' · ✗ '+(fail+cancelled):'');
+        updateTitle();
+        resolve();
+      };
+      xhr.onerror=()=>{
+        delete xhrs[i];
+        fail++;done++;
+        rows[i].cancel.classList.add('hidden');
+        rows[i].bar.classList.add('err');
+        rows[i].pct.textContent='';
+        rows[i].st.textContent='\u2718';
+        pf.style.width=(done/total*100)+'%';
+        pl.textContent=done+' / '+total+' · ✗ '+fail;
+        updateTitle();
+        resolve();
+      };
+      xhr.open('POST','/upload');
+      xhr.send(fd);
+    });
   }
 
-  // pula – max CONCURRENCY requestów naraz
-  const queue=[...arr];
-  async function worker(){
-    while(queue.length){
-      const file=queue.shift();
-      if(file)await uploadOne(file);
-    }
-  }
+  const queue=arr.map((f,i)=>()=>uploadOne(f,i));
+  async function worker(){while(queue.length){const task=queue.shift();if(task)await task();}}
   await Promise.all(Array.from({length:Math.min(CONCURRENCY,total)},worker));
 
-  pf.style.width="100%";
-  if(ok)toast(`✓ Przesłano ${ok} plik${ok===1?"":"ów"}`+(fail?` · ✗ ${fail} błędów`:""));
-  setTimeout(()=>{pw.style.display="none";pf.style.width="0";location.reload();},700);
+  pf.style.width='100%';
+  const msg=ok+' '+(ok===1?'plik':'pliki/ów')+' przesłano'+(fail?' · ✗ '+fail+' błędów':'')+(cancelled?' · ⊘ '+cancelled+' anulowano':'');
+  pl.textContent=msg;
+  upoCloseBtn.style.display='flex';
+  if(ok)toast('✓ '+ok+' '+(ok===1?'plik':'pliki/ów')+' przesłano');
+  setTimeout(()=>location.reload(),900);
 }
 
 // ── Delete ───────────────────────────────────────────
@@ -2187,14 +3554,17 @@ const lazyObs=new IntersectionObserver((entries)=>{
         img.classList.add('loaded');
         img.style.display='';
         // okładka audio — pokaż cover, ukryj ikonę
-        const wrap=img.closest('.thumb-audio');
-        if(wrap)wrap.classList.add('has-cover');
+        const wrapA=img.closest('.thumb-audio');
+        if(wrapA)wrapA.classList.add('has-cover');
+        // okładka wideo — pokaż cover
+        const wrapV=img.closest('.thumb-video-inner');
+        if(wrapV)wrapV.closest('.thumb-video').classList.add('has-cover');
       };
       img.onerror=()=>{img.style.display='none';};
       lazyObs.unobserve(img);
     }
   });
-},{rootMargin:'100px'});
+},{rootMargin:'120px'});
 document.querySelectorAll('img.lazy').forEach(img=>lazyObs.observe(img));
 
 // ── HAMBURGER MENU ──
@@ -2253,8 +3623,8 @@ document.querySelectorAll('img.lazy').forEach(img=>lazyObs.observe(img));
     });
   }
 
-  // Zamknij przy obróceniu/powiększeniu do desktop
-  window.addEventListener('resize',()=>{if(window.innerWidth>600)window.closeMobMenu();});
+  // Zamknij przy ESC
+  document.addEventListener('keydown',e=>{if(e.key==='Escape')window.closeMobMenu();});
 
   // Obsługa akcji w menu przez event delegation (działa na iOS)
   const panel=document.querySelector('.mob-menu-panel');
@@ -2284,6 +3654,12 @@ document.querySelectorAll('img.lazy').forEach(img=>lazyObs.observe(img));
   }
 })();
 %%STATS_JS%%
+async function desktopRestart(){
+  if(!confirm('Zrestartować serwer?'))return;
+  try{await fetch('/restart',{method:'POST'});}catch(e){}
+  toast('Restartuję... odśwież za chwilę');
+  setTimeout(()=>location.reload(),4000);
+}
 async function mobRestart(){
   const btn=document.getElementById('mob-restart-btn');
   if(!btn)return;
@@ -2294,6 +3670,7 @@ async function mobRestart(){
   setTimeout(()=>location.reload(),4000);
 }
 </script>
+%%BG_ANIM%%
 </body>
 </html>"""
 
@@ -2327,7 +3704,7 @@ def build_viewer(fname, fsize, fenc, vtype, text_content, parent_enc, fraw=None)
                 <circle cx="40" cy="40" r="38" fill="#1a1f2e" stroke="#2d3a52" stroke-width="1.5"/>
                 <circle cx="40" cy="40" r="28" fill="#111827" stroke="#2d3a52" stroke-width="1"/>
                 <circle cx="40" cy="40" r="18" fill="#0d1117" stroke="#2d3a52" stroke-width="1"/>
-                <circle cx="40" cy="40" r="4" fill="#818cf8"/>
+                <circle cx="40" cy="40" r="4" fill="var(--acc)"/>
               </svg>
               <img src="/thumb?path={fenc}" id="vaudio-cover-img" alt="cover" class="vaudio-cover-img">
               <div class="vaudio-note" id="vaudio-note-ico">
@@ -2414,33 +3791,71 @@ def build_viewer(fname, fsize, fenc, vtype, text_content, parent_enc, fraw=None)
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>{fname}</title>
-<link rel="icon" type="image/svg+xml" href="https://media.lordicon.com/icons/wired/gradient/53-location-pin-on-round-map.svg">
+<link rel="icon" id="dyn-favicon" type="image/svg+xml" href="">
+<script>
+(function(){{
+  function makeFavicon(){{
+    var acc=getComputedStyle(document.documentElement).getPropertyValue('--acc').trim()||'#e2e8f0';
+    var svg='<svg viewBox="0 0 38 22" xmlns="http://www.w3.org/2000/svg"><path d="M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z" stroke="'+acc+'" stroke-width="1.6" stroke-linejoin="round" fill="'+acc+'22"/><path d="M11 8.5a3.5 3.5 0 012.2-3.2" stroke="'+acc+'" stroke-width="1.1" stroke-linecap="round" opacity=".4"/></svg>';
+    var el=document.getElementById('dyn-favicon');
+    if(el) el.href='data:image/svg+xml,'+encodeURIComponent(svg);
+  }}
+  function init(){{
+    makeFavicon();
+    new MutationObserver(makeFavicon).observe(document.documentElement,{{attributes:true,attributeFilter:['style','class']}});
+  }}
+  if(document.readyState==='loading'){{document.addEventListener('DOMContentLoaded',init);}}else{{init();}}
+}})();
+</script>
+<script>
+(function(){{
+  try{{
+    var _s=JSON.parse(localStorage.getItem('sc_theme')||'null');
+    if(!_s) return;
+    var _DK={'Niebieski':{acc:'#818cf8',acc2:'#4f46e5',bg:'#0a0c14',sur:'#111827',brd:'#1e2535',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(79,70,229,.55)',gr2:'rgba(109,40,217,.30)',gr3:'rgba(67,56,202,.28)',gr4:'rgba(124,58,237,.20)'},'Zielony':{acc:'#34d399',acc2:'#059669',bg:'#091410',sur:'#0f1f1a',brd:'#1a3028',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(5,150,105,.50)',gr2:'rgba(4,120,87,.28)',gr3:'rgba(6,95,70,.25)',gr4:'rgba(20,83,45,.18)'},'Czerwony':{acc:'#f87171',acc2:'#dc2626',bg:'#110a0a',sur:'#1e1010',brd:'#2e1a1a',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(220,38,38,.50)',gr2:'rgba(185,28,28,.28)',gr3:'rgba(153,27,27,.25)',gr4:'rgba(127,29,29,.18)'},'Fioletowy':{acc:'#c084fc',acc2:'#9333ea',bg:'#0d0a14',sur:'#180f27',brd:'#2a1a40',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(147,51,234,.55)',gr2:'rgba(126,34,206,.30)',gr3:'rgba(107,33,168,.28)',gr4:'rgba(88,28,135,.20)'},'Mono':{acc:'#e2e8f0',acc2:'#94a3b8',bg:'#09090b',sur:'#18181b',brd:'#27272a',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(148,163,184,.22)',gr2:'rgba(100,116,139,.12)',gr3:'rgba(71,85,105,.10)',gr4:'rgba(51,65,85,.08)'},'Różowy':{acc:'#f472b6',acc2:'#db2777',bg:'#11080d',sur:'#1e0f18',brd:'#2e1a26',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(219,39,119,.50)',gr2:'rgba(190,24,93,.28)',gr3:'rgba(157,23,77,.25)',gr4:'rgba(131,24,67,.18)'}};
+    var _LT={'Niebieski':{acc:'#4f46e5',acc2:'#3730a3',bg:'#f0f2ff',sur:'#ffffff',brd:'#dde1f0',txt:'#1a1f36',muted:'#6b7280',gr1:'rgba(79,70,229,.12)',gr2:'rgba(109,40,217,.07)',gr3:'rgba(67,56,202,.06)',gr4:'rgba(124,58,237,.05)'},'Zielony':{acc:'#059669',acc2:'#047857',bg:'#f0faf6',sur:'#ffffff',brd:'#d1f0e6',txt:'#0f2a1f',muted:'#6b7280',gr1:'rgba(5,150,105,.10)',gr2:'rgba(4,120,87,.06)',gr3:'rgba(6,95,70,.05)',gr4:'rgba(20,83,45,.04)'},'Czerwony':{acc:'#dc2626',acc2:'#b91c1c',bg:'#fff0f0',sur:'#ffffff',brd:'#f0d5d5',txt:'#2a0a0a',muted:'#6b7280',gr1:'rgba(220,38,38,.10)',gr2:'rgba(185,28,28,.06)',gr3:'rgba(153,27,27,.05)',gr4:'rgba(127,29,29,.04)'},'Fioletowy':{acc:'#9333ea',acc2:'#7c3aed',bg:'#f5f0ff',sur:'#ffffff',brd:'#e2d5f5',txt:'#1a0a2e',muted:'#6b7280',gr1:'rgba(147,51,234,.10)',gr2:'rgba(126,34,206,.06)',gr3:'rgba(107,33,168,.05)',gr4:'rgba(88,28,135,.04)'},'Mono':{acc:'#334155',acc2:'#1e293b',bg:'#f8fafc',sur:'#ffffff',brd:'#e2e8f0',txt:'#0f172a',muted:'#64748b',gr1:'rgba(148,163,184,.15)',gr2:'rgba(100,116,139,.08)',gr3:'rgba(71,85,105,.06)',gr4:'rgba(51,65,85,.04)'},'Różowy':{acc:'#db2777',acc2:'#be185d',bg:'#fff0f7',sur:'#ffffff',brd:'#f0d5e8',txt:'#2a0a18',muted:'#6b7280',gr1:'rgba(219,39,119,.10)',gr2:'rgba(190,24,93,.06)',gr3:'rgba(157,23,77,.05)',gr4:'rgba(131,24,67,.04)'}};
+    var _mode=_s.mode||'dark', _name=_s.name||'Mono';
+    var t=(_mode==='light'?_LT:_DK)[_name]||(_mode==='light'?_LT:_DK)['Mono'];
+    var r=document.documentElement;
+    r.style.setProperty('--acc',  t.acc);
+    r.style.setProperty('--acc2', t.acc2);
+    r.style.setProperty('--bg',   t.bg);
+    r.style.setProperty('--sur',  t.sur);
+    r.style.setProperty('--brd',  t.brd);
+    r.style.setProperty('--txt',  t.txt||'#e6edf3');
+    r.style.setProperty('--muted',t.muted||'#7d8590');
+    r.style.setProperty('--gr1',  t.gr1);
+    r.style.setProperty('--gr2',  t.gr2);
+    r.style.setProperty('--gr3',  t.gr3);
+    r.style.setProperty('--gr4',  t.gr4);
+    r.classList.toggle('theme-mono', _name==='Mono');
+    r.classList.toggle('theme-light', _mode==='light');
+  }}catch(e){{}}
+}})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Audiowide&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
-:root{{--bg:#0a0c14;--sur:#111827;--brd:#1e2535;--txt:#e6edf3;--muted:#7d8590;--acc:#818cf8;--r:10px}}
+:root{{--bg:#09090b;--sur:#18181b;--brd:#27272a;--txt:#e6edf3;--muted:#7d8590;--acc:#e2e8f0;--acc2:#94a3b8;--gr1:rgba(148,163,184,.22);--gr2:rgba(100,116,139,.12);--gr3:rgba(71,85,105,.10);--gr4:rgba(51,65,85,.08);--r:10px}}
 body{{
   font-family:"Inter",system-ui,sans-serif;background:var(--bg);color:var(--txt);min-height:100vh;display:flex;flex-direction:column;
-  background-image:
-    radial-gradient(ellipse 160% 120% at 50% -10%, rgba(79,70,229,.55)  0%, rgba(109,40,217,.30) 38%, transparent 65%),
-    radial-gradient(ellipse 60%  50% at 90% 100%,  rgba(67,56,202,.28)  0%, transparent 55%),
-    radial-gradient(ellipse 45%  40% at 0%   70%,  rgba(124,58,237,.20) 0%, transparent 50%);
+  background-image:none;
 }}
 .topbar{{background:rgba(10,12,20,.90);backdrop-filter:blur(12px);border-bottom:1px solid var(--brd);padding:0 20px;height:52px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:50;flex-shrink:0}}
 .back{{display:flex;align-items:center;gap:6px;color:var(--muted);text-decoration:none;font-size:13px;font-weight:500;padding:5px 10px;border-radius:7px;border:1px solid transparent;transition:all .15s;white-space:nowrap}}
 .back:hover{{color:var(--txt);border-color:var(--brd);background:var(--sur)}}
 .topbar-name{{font-size:14px;font-weight:600;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}}
 .topbar-meta{{font-size:12px;color:var(--muted);white-space:nowrap}}
-.dl-btn{{display:flex;align-items:center;gap:6px;color:#e0e7ff;background:#4f46e5;border:none;border-radius:7px;padding:6px 12px;font-family:inherit;font-size:13px;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap;transition:opacity .15s}}
+.dl-btn{{display:flex;align-items:center;gap:6px;color:#e0e7ff;background:var(--acc2);border:none;border-radius:7px;padding:6px 12px;font-family:inherit;font-size:13px;font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap;transition:opacity .15s}}
 .dl-btn:hover{{opacity:.85}}
-.viewer{{flex:1;display:flex;flex-direction:column;overflow:hidden}}
+.viewer{{flex:1;display:flex;flex-direction:column;overflow:hidden;position:relative;z-index:1}}
 .vimg-wrap{{flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:24px;cursor:grab}}
 .vimg-wrap:active{{cursor:grabbing}}
 .vimg-wrap img{{max-width:100%;max-height:75vh;object-fit:contain;transition:transform .2s;border-radius:6px;user-select:none}}
 .vimg-controls{{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px 20px;border-top:1px solid var(--brd);background:var(--sur);flex-shrink:0}}
 .vimg-controls button{{background:var(--bg);border:1px solid var(--brd);color:var(--txt);padding:5px 14px;border-radius:6px;cursor:pointer;font-size:16px;font-family:inherit;transition:background .15s}}
-.vimg-controls button:hover{{background:#1e2535}}
+.vimg-controls button:hover{{background:var(--brd)}}
 .vimg-controls span{{font-size:13px;color:var(--muted);min-width:44px;text-align:center}}
 .vmedia-wrap{{flex:1;display:flex;align-items:center;justify-content:center;padding:24px}}
 .vaudio-wrap{{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;padding:40px 20px}}
@@ -2457,18 +3872,18 @@ body{{
 .vaudio-progress-wrap{{width:100%;padding:4px 0 0}}
 .vaudio-progress-bar{{position:relative;height:4px;border-radius:2px;background:rgba(255,255,255,.1);cursor:pointer;transition:height .15s}}
 .vaudio-progress-bar:hover{{height:6px}}
-.vaudio-progress-fill{{position:absolute;left:0;top:0;height:100%;border-radius:2px;background:linear-gradient(90deg,#4f46e5,#818cf8);pointer-events:none;transition:width .1s linear}}
+.vaudio-progress-fill{{position:absolute;left:0;top:0;height:100%;border-radius:2px;background:linear-gradient(90deg,var(--acc2),var(--acc));pointer-events:none;transition:width .1s linear}}
 .vaudio-progress-thumb{{position:absolute;top:50%;width:14px;height:14px;border-radius:50%;background:#818cf8;transform:translate(-50%,-50%) scale(0);transition:transform .15s;box-shadow:0 0 6px rgba(129,140,248,.6);pointer-events:none}}
 .vaudio-progress-bar:hover .vaudio-progress-thumb{{transform:translate(-50%,-50%) scale(1)}}
 .vaudio-times{{display:flex;justify-content:space-between;width:100%;font-size:11px;color:var(--muted);padding:2px 0}}
 .vaudio-controls{{display:flex;align-items:center;gap:16px;margin:4px 0}}
 .vaudio-btn{{background:none;border:none;cursor:pointer;color:var(--muted);transition:color .15s,transform .1s;display:flex;align-items:center;justify-content:center;padding:6px;border-radius:50%}}
 .vaudio-btn:hover{{color:var(--txt);transform:scale(1.1)}}
-.vaudio-btn-play{{width:56px;height:56px;background:linear-gradient(135deg,#4f46e5,#818cf8);color:#fff !important;border-radius:50%;box-shadow:0 4px 20px rgba(79,70,229,.5);transition:transform .1s,box-shadow .15s}}
+.vaudio-btn-play{{width:56px;height:56px;background:linear-gradient(135deg,var(--acc2),var(--acc));color:#fff !important;border-radius:50%;box-shadow:0 4px 20px rgba(79,70,229,.5);transition:transform .1s,box-shadow .15s}}
 .vaudio-btn-play:hover{{transform:scale(1.07)!important;box-shadow:0 6px 28px rgba(79,70,229,.7)}}
 .vaudio-vol-row{{display:flex;align-items:center;gap:8px;width:100%;color:var(--muted)}}
 .vaudio-vol{{flex:1;-webkit-appearance:none;appearance:none;height:3px;border-radius:2px;background:rgba(255,255,255,.1);outline:none;cursor:pointer}}
-.vaudio-vol::-webkit-slider-thumb{{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#818cf8;cursor:pointer}}
+.vaudio-vol::-webkit-slider-thumb{{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:var(--acc);cursor:pointer}}
 audio{{display:none}}
 .vpdf-wrap{{flex:1;padding:0;display:flex}}
 .vpdf-wrap iframe{{flex:1}}
@@ -2484,12 +3899,12 @@ pre#vtext{{font-family:"JetBrains Mono","Fira Code",monospace;font-size:13px;lin
 .varchive-list{{flex:1;overflow-y:auto;padding:8px 12px;scrollbar-width:none}}
 .varchive-list::-webkit-scrollbar{{display:none}}
 .arc-row{{display:grid;grid-template-columns:20px 1fr auto 28px;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;transition:background .12s;font-size:13px}}
-.arc-row:hover{{background:rgba(129,140,248,.07)}}
+.arc-row:hover{{background:color-mix(in srgb,var(--acc) 7%,transparent)}}
 .arc-dir .arc-name{{color:#e3b341;font-weight:500}}
 .arc-name{{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--txt)}}
 .arc-size{{font-size:11px;color:var(--muted);white-space:nowrap;text-align:right}}
 .arc-dl{{color:var(--acc);text-decoration:none;font-size:15px;display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:6px;transition:background .12s;border:1px solid transparent}}
-.arc-dl:hover{{background:rgba(129,140,248,.15);border-color:var(--acc)}}
+.arc-dl:hover{{background:color-mix(in srgb,var(--acc) 15%,transparent);border-color:var(--acc)}}
 .arc-loading,.arc-err,.arc-empty{{display:flex;align-items:center;justify-content:center;gap:10px;padding:60px 20px;color:var(--muted);font-size:14px}}
 .arc-err{{color:#f85149}}
 @keyframes spin{{from{{transform:rotate(0deg)}}to{{transform:rotate(360deg)}}}}
@@ -2604,6 +4019,7 @@ if(img){{
   }},{{passive:false}});
 }}
 </script>
+{BG_ANIMATION_JS}
 </body>
 </html>'''
 
@@ -2644,19 +4060,57 @@ def build_ban_page(username, ban_data):
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Zbanowany – SAFE CLOUD</title>
-<link rel="icon" type="image/svg+xml" href="https://media.lordicon.com/icons/wired/gradient/53-location-pin-on-round-map.svg">
+<link rel="icon" id="dyn-favicon" type="image/svg+xml" href="">
+<script>
+(function(){{
+  function makeFavicon(){{
+    var acc=getComputedStyle(document.documentElement).getPropertyValue('--acc').trim()||'#e2e8f0';
+    var svg='<svg viewBox="0 0 38 22" xmlns="http://www.w3.org/2000/svg"><path d="M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z" stroke="'+acc+'" stroke-width="1.6" stroke-linejoin="round" fill="'+acc+'22"/><path d="M11 8.5a3.5 3.5 0 012.2-3.2" stroke="'+acc+'" stroke-width="1.1" stroke-linecap="round" opacity=".4"/></svg>';
+    var el=document.getElementById('dyn-favicon');
+    if(el) el.href='data:image/svg+xml,'+encodeURIComponent(svg);
+  }}
+  function init(){{
+    makeFavicon();
+    new MutationObserver(makeFavicon).observe(document.documentElement,{{attributes:true,attributeFilter:['style','class']}});
+  }}
+  if(document.readyState==='loading'){{document.addEventListener('DOMContentLoaded',init);}}else{{init();}}
+}})();
+</script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Audiowide&display=swap" rel="stylesheet">
+<script>
+(function(){{
+  try{{
+    var _s=JSON.parse(localStorage.getItem('sc_theme')||'null');
+    if(!_s) return;
+    var _DK={'Niebieski':{acc:'#818cf8',acc2:'#4f46e5',bg:'#0a0c14',sur:'#111827',brd:'#1e2535',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(79,70,229,.55)',gr2:'rgba(109,40,217,.30)',gr3:'rgba(67,56,202,.28)',gr4:'rgba(124,58,237,.20)'},'Zielony':{acc:'#34d399',acc2:'#059669',bg:'#091410',sur:'#0f1f1a',brd:'#1a3028',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(5,150,105,.50)',gr2:'rgba(4,120,87,.28)',gr3:'rgba(6,95,70,.25)',gr4:'rgba(20,83,45,.18)'},'Czerwony':{acc:'#f87171',acc2:'#dc2626',bg:'#110a0a',sur:'#1e1010',brd:'#2e1a1a',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(220,38,38,.50)',gr2:'rgba(185,28,28,.28)',gr3:'rgba(153,27,27,.25)',gr4:'rgba(127,29,29,.18)'},'Fioletowy':{acc:'#c084fc',acc2:'#9333ea',bg:'#0d0a14',sur:'#180f27',brd:'#2a1a40',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(147,51,234,.55)',gr2:'rgba(126,34,206,.30)',gr3:'rgba(107,33,168,.28)',gr4:'rgba(88,28,135,.20)'},'Mono':{acc:'#e2e8f0',acc2:'#94a3b8',bg:'#09090b',sur:'#18181b',brd:'#27272a',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(148,163,184,.22)',gr2:'rgba(100,116,139,.12)',gr3:'rgba(71,85,105,.10)',gr4:'rgba(51,65,85,.08)'},'Różowy':{acc:'#f472b6',acc2:'#db2777',bg:'#11080d',sur:'#1e0f18',brd:'#2e1a26',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(219,39,119,.50)',gr2:'rgba(190,24,93,.28)',gr3:'rgba(157,23,77,.25)',gr4:'rgba(131,24,67,.18)'}};
+    var _LT={'Niebieski':{acc:'#4f46e5',acc2:'#3730a3',bg:'#f0f2ff',sur:'#ffffff',brd:'#dde1f0',txt:'#1a1f36',muted:'#6b7280',gr1:'rgba(79,70,229,.12)',gr2:'rgba(109,40,217,.07)',gr3:'rgba(67,56,202,.06)',gr4:'rgba(124,58,237,.05)'},'Zielony':{acc:'#059669',acc2:'#047857',bg:'#f0faf6',sur:'#ffffff',brd:'#d1f0e6',txt:'#0f2a1f',muted:'#6b7280',gr1:'rgba(5,150,105,.10)',gr2:'rgba(4,120,87,.06)',gr3:'rgba(6,95,70,.05)',gr4:'rgba(20,83,45,.04)'},'Czerwony':{acc:'#dc2626',acc2:'#b91c1c',bg:'#fff0f0',sur:'#ffffff',brd:'#f0d5d5',txt:'#2a0a0a',muted:'#6b7280',gr1:'rgba(220,38,38,.10)',gr2:'rgba(185,28,28,.06)',gr3:'rgba(153,27,27,.05)',gr4:'rgba(127,29,29,.04)'},'Fioletowy':{acc:'#9333ea',acc2:'#7c3aed',bg:'#f5f0ff',sur:'#ffffff',brd:'#e2d5f5',txt:'#1a0a2e',muted:'#6b7280',gr1:'rgba(147,51,234,.10)',gr2:'rgba(126,34,206,.06)',gr3:'rgba(107,33,168,.05)',gr4:'rgba(88,28,135,.04)'},'Mono':{acc:'#334155',acc2:'#1e293b',bg:'#f8fafc',sur:'#ffffff',brd:'#e2e8f0',txt:'#0f172a',muted:'#64748b',gr1:'rgba(148,163,184,.15)',gr2:'rgba(100,116,139,.08)',gr3:'rgba(71,85,105,.06)',gr4:'rgba(51,65,85,.04)'},'Różowy':{acc:'#db2777',acc2:'#be185d',bg:'#fff0f7',sur:'#ffffff',brd:'#f0d5e8',txt:'#2a0a18',muted:'#6b7280',gr1:'rgba(219,39,119,.10)',gr2:'rgba(190,24,93,.06)',gr3:'rgba(157,23,77,.05)',gr4:'rgba(131,24,67,.04)'}};
+    var _mode=_s.mode||'dark', _name=_s.name||'Mono';
+    var t=(_mode==='light'?_LT:_DK)[_name]||(_mode==='light'?_LT:_DK)['Mono'];
+    var r=document.documentElement;
+    r.style.setProperty('--acc',  t.acc);
+    r.style.setProperty('--acc2', t.acc2);
+    r.style.setProperty('--bg',   t.bg);
+    r.style.setProperty('--sur',  t.sur);
+    r.style.setProperty('--brd',  t.brd);
+    r.style.setProperty('--txt',  t.txt||'#e6edf3');
+    r.style.setProperty('--muted',t.muted||'#7d8590');
+    r.style.setProperty('--gr1',  t.gr1);
+    r.style.setProperty('--gr2',  t.gr2);
+    r.style.setProperty('--gr3',  t.gr3);
+    r.style.setProperty('--gr4',  t.gr4);
+    r.classList.toggle('theme-mono', _name==='Mono');
+    r.classList.toggle('theme-light', _mode==='light');
+  }}catch(e){{}}
+}})();
+</script>
 <style>
 *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
-:root{{--bg:#0a0c14;--sur:#111827;--brd:#1e2535;--txt:#e6edf3;--muted:#7d8590;--red:#f85149;--red2:#6e3535}}
+:root{{--bg:#09090b;--sur:#18181b;--brd:#27272a;--txt:#e6edf3;--muted:#7d8590;--red:#f85149;--red2:#6e3535;--acc:#e2e8f0;--acc2:#94a3b8}}
 body{{
   font-family:'Inter',system-ui,sans-serif;
   background:var(--bg);color:var(--txt);
   min-height:100vh;display:flex;align-items:center;justify-content:center;
-  background-image:
-    radial-gradient(ellipse 160% 120% at 50% -10%, rgba(180,30,30,.45) 0%, rgba(120,20,20,.25) 38%, transparent 65%),
-    radial-gradient(ellipse 60%  50% at 90% 100%, rgba(110,53,53,.25) 0%, transparent 55%),
-    radial-gradient(ellipse 45%  40% at 0%  70%,  rgba(130,40,40,.20) 0%, transparent 50%);
+  background-image:none;
 }}
 .card{{
   background:var(--sur);border:1px solid var(--red2);border-radius:20px;
@@ -2749,6 +4203,7 @@ if(expires){{
   tick();
 }}
 </script>
+{BG_ANIMATION_JS}
 </body>
 </html>"""
 
@@ -2780,6 +4235,305 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    def setup_2fa_prompt_page(self, session_token):
+        """Strona po rejestracji pytająca o włączenie 2FA."""
+        secret  = totp_generate_secret()
+        uri     = totp_get_uri("__setup__", secret)
+        qr_url  = "https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=" + urllib.parse.quote(uri)
+        return f"""<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<title>SAFE CLOUD \u2014 Konfiguracja 2FA</title>
+<link rel="icon" id="dyn-favicon" type="image/svg+xml" href="">
+<script>
+(function(){{
+  var _s=JSON.parse(localStorage.getItem('sc_theme')||'null');
+  if(!_s)return;
+  var _DK={{'Niebieski':{{acc:'#818cf8',acc2:'#4f46e5',bg:'#0a0c14',sur:'#111827',brd:'#1e2535',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(79,70,229,.55)',gr2:'rgba(109,40,217,.30)',gr3:'rgba(67,56,202,.28)',gr4:'rgba(124,58,237,.20)'}},'Zielony':{{acc:'#34d399',acc2:'#059669',bg:'#091410',sur:'#0f1f1a',brd:'#1a3028',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(5,150,105,.50)',gr2:'rgba(4,120,87,.28)',gr3:'rgba(6,95,70,.25)',gr4:'rgba(20,83,45,.18)'}},'Czerwony':{{acc:'#f87171',acc2:'#dc2626',bg:'#110a0a',sur:'#1e1010',brd:'#2e1a1a',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(220,38,38,.50)',gr2:'rgba(185,28,28,.28)',gr3:'rgba(153,27,27,.25)',gr4:'rgba(127,29,29,.18)'}},'Fioletowy':{{acc:'#c084fc',acc2:'#9333ea',bg:'#0d0a14',sur:'#180f27',brd:'#2a1a40',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(147,51,234,.55)',gr2:'rgba(126,34,206,.30)',gr3:'rgba(107,33,168,.28)',gr4:'rgba(88,28,135,.20)'}},'Mono':{{acc:'#e2e8f0',acc2:'#94a3b8',bg:'#09090b',sur:'#18181b',brd:'#27272a',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(148,163,184,.22)',gr2:'rgba(100,116,139,.12)',gr3:'rgba(71,85,105,.10)',gr4:'rgba(51,65,85,.08)'}},'Różowy':{{acc:'#f472b6',acc2:'#db2777',bg:'#11080d',sur:'#1e0f18',brd:'#2e1a26',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(219,39,119,.50)',gr2:'rgba(190,24,93,.28)',gr3:'rgba(157,23,77,.25)',gr4:'rgba(131,24,67,.18)'}}}};
+  var _LT={{'Niebieski':{{acc:'#4f46e5',acc2:'#3730a3',bg:'#f0f2ff',sur:'#ffffff',brd:'#dde1f0',txt:'#1a1f36',muted:'#6b7280',gr1:'rgba(79,70,229,.12)',gr2:'rgba(109,40,217,.07)',gr3:'rgba(67,56,202,.06)',gr4:'rgba(124,58,237,.05)'}},'Zielony':{{acc:'#059669',acc2:'#047857',bg:'#f0faf6',sur:'#ffffff',brd:'#d1f0e6',txt:'#0f2a1f',muted:'#6b7280',gr1:'rgba(5,150,105,.10)',gr2:'rgba(4,120,87,.06)',gr3:'rgba(6,95,70,.05)',gr4:'rgba(20,83,45,.04)'}},'Czerwony':{{acc:'#dc2626',acc2:'#b91c1c',bg:'#fff0f0',sur:'#ffffff',brd:'#f0d5d5',txt:'#2a0a0a',muted:'#6b7280',gr1:'rgba(220,38,38,.10)',gr2:'rgba(185,28,28,.06)',gr3:'rgba(153,27,27,.05)',gr4:'rgba(127,29,29,.04)'}},'Fioletowy':{{acc:'#9333ea',acc2:'#7c3aed',bg:'#f5f0ff',sur:'#ffffff',brd:'#e2d5f5',txt:'#1a0a2e',muted:'#6b7280',gr1:'rgba(147,51,234,.10)',gr2:'rgba(126,34,206,.06)',gr3:'rgba(107,33,168,.05)',gr4:'rgba(88,28,135,.04)'}},'Mono':{{acc:'#334155',acc2:'#1e293b',bg:'#f8fafc',sur:'#ffffff',brd:'#e2e8f0',txt:'#0f172a',muted:'#64748b',gr1:'rgba(148,163,184,.15)',gr2:'rgba(100,116,139,.08)',gr3:'rgba(71,85,105,.06)',gr4:'rgba(51,65,85,.04)'}},'Różowy':{{acc:'#db2777',acc2:'#be185d',bg:'#fff0f7',sur:'#ffffff',brd:'#f0d5e8',txt:'#2a0a18',muted:'#6b7280',gr1:'rgba(219,39,119,.10)',gr2:'rgba(190,24,93,.06)',gr3:'rgba(157,23,77,.05)',gr4:'rgba(131,24,67,.04)'}}}};
+  var _mode=_s.mode||'dark',_name=_s.name||'Mono';
+  var t=(_mode==='light'?_LT:_DK)[_name]||(_mode==='light'?_LT:_DK)['Mono'];
+  var r=document.documentElement;
+  r.style.setProperty('--acc',t.acc);r.style.setProperty('--acc2',t.acc2);
+  r.style.setProperty('--bg',t.bg);r.style.setProperty('--sur',t.sur);r.style.setProperty('--brd',t.brd);
+  r.style.setProperty('--txt',t.txt||'#e6edf3');r.style.setProperty('--muted',t.muted||'#7d8590');
+  r.style.setProperty('--gr1',t.gr1);r.style.setProperty('--gr2',t.gr2);
+  r.style.setProperty('--gr3',t.gr3);r.style.setProperty('--gr4',t.gr4);
+  r.classList.toggle('theme-mono',_name==='Mono');r.classList.toggle('theme-light',_mode==='light');
+}}catch(e){{}}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Audiowide&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+:root{{--bg:#09090b;--sur:#18181b;--brd:#27272a;--txt:#e6edf3;--muted:#7d8590;--acc:#e2e8f0;--acc2:#94a3b8;
+  --gr1:rgba(148,163,184,.22);--gr2:rgba(100,116,139,.12);--gr3:rgba(71,85,105,.10);--gr4:rgba(51,65,85,.08)}}
+body{{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--txt);
+  min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}}
+.card{{background:var(--sur);border:1px solid var(--brd);border-radius:20px;padding:36px 32px;
+  width:100%;max-width:400px;text-align:center;box-shadow:0 24px 64px rgba(0,0,0,.55);position:relative;z-index:1}}
+.logo{{display:flex;align-items:center;justify-content:center;gap:9px;
+  font-family:'Audiowide',sans-serif;font-size:15px;font-weight:700;letter-spacing:.04em;
+  color:var(--txt);margin-bottom:28px}}
+/* Badge nowy krok */
+.step-badge{{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;
+  letter-spacing:.06em;text-transform:uppercase;color:var(--acc);
+  background:color-mix(in srgb,var(--acc) 12%,transparent);
+  border:1px solid color-mix(in srgb,var(--acc) 30%,transparent);
+  border-radius:20px;padding:4px 12px;margin-bottom:20px}}
+h2{{font-size:18px;font-weight:700;margin-bottom:8px}}
+.sub{{font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:24px}}
+.sep{{height:1px;background:var(--brd);margin:20px 0}}
+/* Przyciski */
+.btn-primary{{width:100%;padding:12px;border:none;border-radius:12px;
+  background:linear-gradient(135deg,var(--acc2),var(--acc));color:var(--bg);
+  font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;
+  transition:opacity .15s,transform .1s;margin-bottom:10px;display:flex;
+  align-items:center;justify-content:center;gap:8px}}
+.btn-primary:hover{{opacity:.9;transform:translateY(-1px)}}
+.btn-skip{{width:100%;padding:11px;border:1px solid var(--brd);border-radius:12px;
+  background:none;color:var(--muted);font-family:inherit;font-size:13px;
+  cursor:pointer;transition:all .15s}}
+.btn-skip:hover{{border-color:var(--acc);color:var(--txt)}}
+/* Sekcja QR */
+.qr-wrap{{display:none;margin-top:20px;text-align:left}}
+.qr-wrap.show{{display:block}}
+.qr-center{{text-align:center;margin:16px 0}}
+.qr-center img{{border-radius:10px;background:#fff;padding:8px}}
+.qr-secret{{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);
+  background:var(--bg);border:1px solid var(--brd);border-radius:8px;
+  padding:8px 12px;word-break:break-all;text-align:center;margin:10px 0 16px}}
+label{{display:block;font-size:11px;font-weight:600;text-transform:uppercase;
+  letter-spacing:.05em;color:var(--muted);margin-bottom:6px;text-align:left}}
+input[type=text]{{width:100%;padding:10px 13px;border:1px solid var(--brd);border-radius:8px;
+  font-family:inherit;font-size:16px;color:var(--txt);background:var(--bg);outline:none;
+  margin-bottom:12px;letter-spacing:6px;text-align:center;transition:border-color .15s}}
+input[type=text]:focus{{border-color:var(--acc)}}
+.err{{color:#f85149;font-size:12px;margin-bottom:12px;display:none}}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <svg width="30" height="18" viewBox="0 0 38 22" fill="none">
+      <path d="M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z"
+            stroke="var(--acc)" stroke-width="1.6" stroke-linejoin="round" fill="rgba(226,232,240,0.08)"/>
+      <path d="M11 8.5a3.5 3.5 0 012.2-3.2" stroke="var(--acc)" stroke-width="1.1" stroke-linecap="round" opacity=".3"/>
+    </svg>
+    SAFE CLOUD
+  </div>
+
+  <div class="step-badge">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+    </svg>
+    Opcjonalne zabezpieczenie
+  </div>
+
+  <h2>Czy chcesz w\u0142\u0105czy\u0107 2FA?</h2>
+  <p class="sub">Uwierzytelnianie dwusk\u0142adnikowe znacznie zwi\u0119ksza bezpiecze\u0144stwo konta. Mo\u017cesz to zrobi\u0107 teraz lub p\u00f3\u017aniej w ustawieniach.</p>
+
+  <!-- Krok 1 — pytanie -->
+  <div id="step1">
+    <button class="btn-primary" onclick="showSetup()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+      </svg>
+      Tak, w\u0142\u0105cz 2FA teraz
+    </button>
+    <button class="btn-skip" onclick="skipSetup()">Pomi\u0144 \u2014 zrobi\u0119 to p\u00f3\u017aniej</button>
+  </div>
+
+  <!-- Krok 2 — konfiguracja -->
+  <div class="qr-wrap" id="step2">
+    <div class="sep" style="margin-top:0"></div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:4px">
+      Zeskanuj kod QR w <b style="color:var(--txt)">Google Authenticator</b> lub podobnej aplikacji.
+    </p>
+    <div class="qr-center">
+      <img src="{qr_url}" width="160" height="160" alt="QR kod">
+    </div>
+    <div class="qr-secret" id="secret-display">{secret}</div>
+    <label>Wpisz 6-cyfrowy kod weryfikacyjny</label>
+    <input type="text" id="code-inp" placeholder="000000" maxlength="6" inputmode="numeric"
+           oninput="this.value=this.value.replace(/[^0-9]/g,'')">
+    <div class="err" id="err-msg">Nieprawid\u0142owy kod. Spr\u00f3buj ponownie.</div>
+    <button class="btn-primary" onclick="verifyAndEnable()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15">
+        <polyline points="20 6 9 17 4 12"/>
+      </svg>
+      Potwierd\u017a i w\u0142\u0105cz 2FA
+    </button>
+    <button class="btn-skip" onclick="skipSetup()">Pomi\u0144 na razie</button>
+  </div>
+</div>
+{BG_ANIMATION_JS}
+<script>
+var SECRET='{secret}';
+var SESSION_TOKEN='{session_token}';
+
+function showSetup(){{
+  document.getElementById('step1').style.display='none';
+  document.getElementById('step2').classList.add('show');
+  document.getElementById('code-inp').focus();
+}}
+
+function skipSetup(){{
+  // Przekieruj na stronę główną — sesja już istnieje w cookie
+  window.location.href='/';
+}}
+
+async function verifyAndEnable(){{
+  var code=document.getElementById('code-inp').value.trim();
+  var err=document.getElementById('err-msg');
+  err.style.display='none';
+  if(code.length!==6){{err.textContent='Wpisz 6-cyfrowy kod.';err.style.display='block';return;}}
+  try{{
+    var r=await fetch('/2fa/setup-register',{{
+      method:'POST',
+      headers:{{'Content-Type':'application/json'}},
+      body:JSON.stringify({{secret:SECRET,code:code}})
+    }});
+    var d=await r.json();
+    if(d.ok){{
+      window.location.href='/';
+    }}else{{
+      err.textContent=d.error||'Nieprawid\u0142owy kod. Spr\u00f3buj ponownie.';
+      err.style.display='block';
+      document.getElementById('code-inp').value='';
+      document.getElementById('code-inp').focus();
+    }}
+  }}catch{{
+    err.textContent='B\u0142\u0105d po\u0142\u0105czenia. Spr\u00f3buj ponownie.';
+    err.style.display='block';
+  }}
+}}
+
+document.getElementById('code-inp').addEventListener('keydown',function(e){{
+  if(e.key==='Enter')verifyAndEnable();
+}});
+</script>
+</body>
+</html>"""
+
+    def totp_page(self, pending, error=""):
+        err_display = "block" if error else "none"
+        return f"""<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0">
+<title>SAFE CLOUD – Weryfikacja 2FA</title>
+<link rel="icon" id="dyn-favicon" type="image/svg+xml" href="">
+<script>
+(function(){{
+  function makeFavicon(){{
+    var acc=getComputedStyle(document.documentElement).getPropertyValue('--acc').trim()||'#e2e8f0';
+    var svg='<svg viewBox="0 0 38 22" xmlns="http://www.w3.org/2000/svg"><path d="M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z" stroke="'+acc+'" stroke-width="1.6" stroke-linejoin="round" fill="'+acc+'22"/><path d="M11 8.5a3.5 3.5 0 012.2-3.2" stroke="'+acc+'" stroke-width="1.1" stroke-linecap="round" opacity=".4"/></svg>';
+    var el=document.getElementById('dyn-favicon');
+    if(el) el.href='data:image/svg+xml,'+encodeURIComponent(svg);
+  }}
+  function init(){{
+    makeFavicon();
+    new MutationObserver(makeFavicon).observe(document.documentElement,{{attributes:true,attributeFilter:['style','class']}});
+  }}
+  if(document.readyState==='loading'){{document.addEventListener('DOMContentLoaded',init);}}else{{init();}}
+}})();
+</script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Audiowide&display=swap" rel="stylesheet">
+
+<script>
+(function(){{
+  try{{
+    var _s=JSON.parse(localStorage.getItem('sc_theme')||'null');
+    if(!_s) return;
+    var _DK={'Niebieski':{acc:'#818cf8',acc2:'#4f46e5',bg:'#0a0c14',sur:'#111827',brd:'#1e2535',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(79,70,229,.55)',gr2:'rgba(109,40,217,.30)',gr3:'rgba(67,56,202,.28)',gr4:'rgba(124,58,237,.20)'},'Zielony':{acc:'#34d399',acc2:'#059669',bg:'#091410',sur:'#0f1f1a',brd:'#1a3028',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(5,150,105,.50)',gr2:'rgba(4,120,87,.28)',gr3:'rgba(6,95,70,.25)',gr4:'rgba(20,83,45,.18)'},'Czerwony':{acc:'#f87171',acc2:'#dc2626',bg:'#110a0a',sur:'#1e1010',brd:'#2e1a1a',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(220,38,38,.50)',gr2:'rgba(185,28,28,.28)',gr3:'rgba(153,27,27,.25)',gr4:'rgba(127,29,29,.18)'},'Fioletowy':{acc:'#c084fc',acc2:'#9333ea',bg:'#0d0a14',sur:'#180f27',brd:'#2a1a40',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(147,51,234,.55)',gr2:'rgba(126,34,206,.30)',gr3:'rgba(107,33,168,.28)',gr4:'rgba(88,28,135,.20)'},'Mono':{acc:'#e2e8f0',acc2:'#94a3b8',bg:'#09090b',sur:'#18181b',brd:'#27272a',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(148,163,184,.22)',gr2:'rgba(100,116,139,.12)',gr3:'rgba(71,85,105,.10)',gr4:'rgba(51,65,85,.08)'},'Różowy':{acc:'#f472b6',acc2:'#db2777',bg:'#11080d',sur:'#1e0f18',brd:'#2e1a26',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(219,39,119,.50)',gr2:'rgba(190,24,93,.28)',gr3:'rgba(157,23,77,.25)',gr4:'rgba(131,24,67,.18)'}};
+    var _LT={'Niebieski':{acc:'#4f46e5',acc2:'#3730a3',bg:'#f0f2ff',sur:'#ffffff',brd:'#dde1f0',txt:'#1a1f36',muted:'#6b7280',gr1:'rgba(79,70,229,.12)',gr2:'rgba(109,40,217,.07)',gr3:'rgba(67,56,202,.06)',gr4:'rgba(124,58,237,.05)'},'Zielony':{acc:'#059669',acc2:'#047857',bg:'#f0faf6',sur:'#ffffff',brd:'#d1f0e6',txt:'#0f2a1f',muted:'#6b7280',gr1:'rgba(5,150,105,.10)',gr2:'rgba(4,120,87,.06)',gr3:'rgba(6,95,70,.05)',gr4:'rgba(20,83,45,.04)'},'Czerwony':{acc:'#dc2626',acc2:'#b91c1c',bg:'#fff0f0',sur:'#ffffff',brd:'#f0d5d5',txt:'#2a0a0a',muted:'#6b7280',gr1:'rgba(220,38,38,.10)',gr2:'rgba(185,28,28,.06)',gr3:'rgba(153,27,27,.05)',gr4:'rgba(127,29,29,.04)'},'Fioletowy':{acc:'#9333ea',acc2:'#7c3aed',bg:'#f5f0ff',sur:'#ffffff',brd:'#e2d5f5',txt:'#1a0a2e',muted:'#6b7280',gr1:'rgba(147,51,234,.10)',gr2:'rgba(126,34,206,.06)',gr3:'rgba(107,33,168,.05)',gr4:'rgba(88,28,135,.04)'},'Mono':{acc:'#334155',acc2:'#1e293b',bg:'#f8fafc',sur:'#ffffff',brd:'#e2e8f0',txt:'#0f172a',muted:'#64748b',gr1:'rgba(148,163,184,.15)',gr2:'rgba(100,116,139,.08)',gr3:'rgba(71,85,105,.06)',gr4:'rgba(51,65,85,.04)'},'Różowy':{acc:'#db2777',acc2:'#be185d',bg:'#fff0f7',sur:'#ffffff',brd:'#f0d5e8',txt:'#2a0a18',muted:'#6b7280',gr1:'rgba(219,39,119,.10)',gr2:'rgba(190,24,93,.06)',gr3:'rgba(157,23,77,.05)',gr4:'rgba(131,24,67,.04)'}};
+    var _mode=_s.mode||'dark', _name=_s.name||'Mono';
+    var t=(_mode==='light'?_LT:_DK)[_name]||(_mode==='light'?_LT:_DK)['Mono'];
+    var r=document.documentElement;
+    r.style.setProperty('--acc',  t.acc);
+    r.style.setProperty('--acc2', t.acc2);
+    r.style.setProperty('--bg',   t.bg);
+    r.style.setProperty('--sur',  t.sur);
+    r.style.setProperty('--brd',  t.brd);
+    r.style.setProperty('--txt',  t.txt||'#e6edf3');
+    r.style.setProperty('--muted',t.muted||'#7d8590');
+    r.style.setProperty('--gr1',  t.gr1);
+    r.style.setProperty('--gr2',  t.gr2);
+    r.style.setProperty('--gr3',  t.gr3);
+    r.style.setProperty('--gr4',  t.gr4);
+    r.classList.toggle('theme-mono', _name==='Mono');
+    r.classList.toggle('theme-light', _mode==='light');
+  }}catch(e){{}}
+}})();
+</script>
+<style>
+*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+:root{{--bg:#09090b;--sur:#18181b;--brd:#27272a;--txt:#e6edf3;--muted:#7d8590;--acc:#e2e8f0;--acc2:#94a3b8;--red:#f85149}}
+body{{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--txt);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background-image:none}}
+.card{{background:var(--sur);border:1px solid var(--brd);border-radius:16px;padding:36px 32px;width:100%;max-width:360px;box-shadow:0 20px 60px rgba(0,0,0,.5);text-align:center;position:relative;z-index:1}}
+.logo{{display:flex;align-items:center;justify-content:center;gap:10px;font-weight:700;font-size:20px;margin-bottom:8px;font-family:'Audiowide',sans-serif}}
+.sub{{font-size:13px;color:var(--muted);margin-bottom:24px}}
+.otp-wrap{{display:flex;gap:8px;justify-content:center;margin-bottom:16px}}
+.otp-inp{{width:44px;height:52px;text-align:center;font-size:22px;font-weight:700;border:1px solid var(--brd);border-radius:10px;background:var(--bg);color:var(--txt);outline:none;transition:border-color .15s;font-family:'JetBrains Mono',monospace}}
+.otp-inp:focus{{border-color:var(--acc)}}
+.submit{{width:100%;padding:11px;border:none;border-radius:8px;background:var(--acc2);color:#e0e7ff;font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;margin-top:4px}}
+.submit:hover{{background:#4338ca}}
+.err{{background:rgba(248,81,73,.12);border:1px solid rgba(248,81,73,.4);color:var(--red);border-radius:8px;padding:10px 13px;font-size:13px;margin-bottom:14px;display:{err_display}}}
+.back{{font-size:12px;color:var(--muted);margin-top:16px;display:block;text-decoration:none}}
+.back:hover{{color:var(--txt)}}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo"><svg viewBox="0 0 38 22" width="26" height="15" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z" stroke="var(--acc)" stroke-width="1.6" stroke-linejoin="round" fill="rgba(129,140,248,0.08)"/><path d="M11 8.5a3.5 3.5 0 012.2-3.2" stroke="var(--acc)" stroke-width="1.1" stroke-linecap="round" opacity=".3"/></svg>SAFE CLOUD</div>
+  <div class="sub">Wprowadź 6-cyfrowy kod z Google Authenticator</div>
+  <div class="err">{html.escape(error)}</div>
+  <form method="POST" action="/totp-verify" id="otp-form">
+    <input type="hidden" name="pending" value="{html.escape(pending)}">
+    <input type="hidden" name="code" id="code-hidden">
+    <div class="otp-wrap" id="otp-wrap">
+      <input class="otp-inp" maxlength="1" inputmode="numeric" pattern="[0-9]">
+      <input class="otp-inp" maxlength="1" inputmode="numeric" pattern="[0-9]">
+      <input class="otp-inp" maxlength="1" inputmode="numeric" pattern="[0-9]">
+      <input class="otp-inp" maxlength="1" inputmode="numeric" pattern="[0-9]">
+      <input class="otp-inp" maxlength="1" inputmode="numeric" pattern="[0-9]">
+      <input class="otp-inp" maxlength="1" inputmode="numeric" pattern="[0-9]">
+    </div>
+    <button class="submit" type="submit">Weryfikuj</button>
+  </form>
+  <a class="back" href="/login">&#8592; Wróć do logowania</a>
+</div>
+<script>
+const inputs=[...document.querySelectorAll('.otp-inp')];
+inputs.forEach((inp,i)=>{{
+  inp.addEventListener('input',e=>{{
+    inp.value=inp.value.replace(/[^0-9]/g,'').slice(-1);
+    if(inp.value&&i<5)inputs[i+1].focus();
+    if(inputs.every(x=>x.value))submit();
+  }});
+  inp.addEventListener('keydown',e=>{{
+    if(e.key==='Backspace'&&!inp.value&&i>0)inputs[i-1].focus();
+  }});
+  inp.addEventListener('paste',e=>{{
+    e.preventDefault();
+    const txt=(e.clipboardData||window.clipboardData).getData('text').replace(/[^0-9]/g,'');
+    txt.split('').forEach((c,j)=>{{if(inputs[j])inputs[j].value=c;}});
+    if(txt.length>=6)submit();
+  }});
+}});
+function submit(){{
+  document.getElementById('code-hidden').value=inputs.map(x=>x.value).join('');
+  document.getElementById('otp-form').submit();
+}}
+inputs[0].focus();
+</script>
+</body>
+</html>"""
+
     def auth_page(self, error="", tab="login"):
         page = (AUTH_HTML
             .replace("%%ERR_DISPLAY%%",  "block" if error else "none")
@@ -2789,6 +4543,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             .replace("%%SHOW_LOGIN%%",   "block" if tab == "login" else "none")
             .replace("%%SHOW_REG%%",     "block" if tab == "reg" else "none")
             .replace("%%APP_VERSION%%",  (lambda v: f"v{v['version']} {v['stage']}")(load_version()))
+            .replace("%%BG_ANIM%%",      BG_ANIMATION_JS)
         )
         return page
 
@@ -2880,8 +4635,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             .replace("%%CURRENT_PATH%%",       "/" + sub)
             .replace("%%APP_VERSION%%",        (lambda v: f"v{v['version']} {v['stage']}")(load_version()))
             .replace("%%TERMINAL_DISPLAY%%",   "%%TERMINAL_DISPLAY%%")  # unused, panel hidden via CSS
-            .replace("%%TERMINAL_BTN%%",       '<button class="term-header-btn" id="term-header-btn" onclick="toggleTerm()" title="Terminal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>Terminal</button>' if has_terminal else "")
-            .replace("%%MOB_TERMINAL_ITEM%%",  '<div class="mob-menu-sep"></div><button class="mob-menu-item" onclick="closeMobMenu();toggleTerm()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>Terminal admina</button>' if has_terminal else "")
+            .replace("%%TERMINAL_BTN%%",       '<button class="logout-btn" onclick="openSettings()" style="border-color:rgba(129,140,248,.3);color:#818cf8;display:inline-flex;align-items:center;gap:5px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="12" cy="8" r="4"/><path d="M6 20v-2a6 6 0 0112 0v2"/><circle cx="19" cy="19" r="3" fill="rgba(129,140,248,.2)" stroke="currentColor"/><line x1="19" y1="17" x2="19" y2="21"/><line x1="17" y1="19" x2="21" y2="19"/></svg>Ustawienia</button>' + (' <button class="term-header-btn" onclick="desktopRestart()" title="Restartuj serwer" style="color:#f87171;border-color:#6e3535"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Restart</button><button class="term-header-btn" id="term-header-btn" onclick="toggleTerm()" title="Terminal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>Terminal</button>' if has_terminal else ''))
+            .replace("%%MOB_TERMINAL_ITEM%%",  '<div class="mob-menu-sep"></div><button class="mob-menu-item" onclick="closeMobMenu();toggleTerm()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>Terminal admina</button>' if has_terminal else '')
             .replace("%%MOB_RESTART_BTN%%",    '''<button class="mob-menu-item red" id="mob-restart-btn" onclick="mobRestart()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
         Restartuj serwer
@@ -2891,13 +4646,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         <div class="msb-title">Serwer</div>
         <div class="mob-stats-grid">
           <div class="msb-row"><span class="msb-lbl">RAM</span><span class="msb-val" id="msb-ram">—</span></div>
+          <div class="msb-row"><span class="msb-lbl">Cloudflared</span><span class="msb-val" id="msb-cfd">—</span></div>
           <div class="msb-row"><span class="msb-lbl">CPU</span><span class="msb-val" id="msb-cpu">—</span></div>
           <div class="msb-row"><span class="msb-lbl">Wątki</span><span class="msb-val" id="msb-thr">—</span></div>
           <div class="msb-row"><span class="msb-lbl">Połączenia</span><span class="msb-val" id="msb-con">—</span></div>
-          <div class="msb-row"><span class="msb-lbl">Ping</span><span class="msb-val" id="msb-ping">—</span></div>
           <div class="msb-row"><span class="msb-lbl">Cache</span><span class="msb-val" id="msb-cache">—</span></div>
           <div class="msb-row"><span class="msb-lbl">Dysk R</span><span class="msb-val" id="msb-dr">—</span></div>
           <div class="msb-row"><span class="msb-lbl">Dysk W</span><span class="msb-val" id="msb-dw">—</span></div>
+          <div class="msb-row"><span class="msb-lbl">Net ↑</span><span class="msb-val" id="msb-nup">—</span></div>
+          <div class="msb-row"><span class="msb-lbl">Net ↓</span><span class="msb-val" id="msb-ndw">—</span></div>
         </div>
       </div>''' if has_terminal else "")
             .replace("%%STATS_JS%%",           '''(function(){
@@ -2928,18 +4685,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         const el=document.getElementById('sb-'+k);if(el)el.textContent=v;
         const mel=document.getElementById('msb-'+k);if(mel)mel.textContent=v;
       });
-      // ping
-      const t0=performance.now();
-      fetch('/stats').then(()=>{
-        const ping=Math.round(performance.now()-t0);
-        const mp=document.getElementById('msb-ping');
-        if(mp){mp.textContent=ping+'ms';mp.className='msb-val'+(ping>200?' over':ping>80?' warn':'');}
-      }).catch(()=>{});
+      // sieć
+      const nup=document.getElementById('msb-nup');if(nup)nup.textContent=d.net_up||'—';
+      const ndw=document.getElementById('msb-ndw');if(ndw)ndw.textContent=d.net_down||'—';
+      const snup=document.getElementById('st-nup');if(snup)snup.textContent=d.net_up||'—';
+      const sndw=document.getElementById('st-ndw');if(sndw)sndw.textContent=d.net_down||'—';
+      // cloudflared RAM
+      const cfd=document.getElementById('msb-cfd');
+      if(cfd){cfd.textContent=d.cloudflared_ram||'—';}
     }catch(e){}
   }
   refreshStats();
   setInterval(refreshStats,30000);
-})();''' if (admin or owner) else "")
+})();''' if (admin or owner or mod) else "")
             .replace("%%SORT_BY%%",            sort_by)
             .replace("%%SORT_DIR%%",           sort_dir)
             .replace("%%SEARCH_VAL%%",         html.escape(search))
@@ -2949,6 +4707,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             .replace("%%SORT_NAME_ICO%%",      sort_ico("name"))
             .replace("%%SORT_DATE_ICO%%",      sort_ico("date"))
             .replace("%%SORT_SIZE_ICO%%",      sort_ico("size"))
+            .replace("%%BG_ANIM%%",            BG_ANIMATION_JS)
         )
         return page
 
@@ -2957,6 +4716,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             p = urllib.parse.urlparse(self.path)
             q = urllib.parse.parse_qs(p.query)
 
+            # ── Tryb konserwacji ─────────────────────────
+            if _maintenance["active"]:
+                # Publiczne linki /s/ też blokujemy
+                # Admin i owner mogą wejść normalnie — sprawdzamy sesję
+                token = get_token_from_request(self)
+                session_user = get_session(token) if token else None
+                if not (session_user and (is_admin(session_user) or is_owner(session_user))):
+                    # Zezwalamy na /login żeby admin mógł się zalogować
+                    if p.path not in ("/login", "/register"):
+                        page = MAINTENANCE_HTML.replace("%%MSG%%", html.escape(_maintenance["message"])).replace("%%BG_ANIM%%", BG_ANIMATION_JS)
+                        self.send_html(page, 503)
+                        return
+
             if p.path == "/login":
                 self.send_html(self.auth_page())
                 return
@@ -2964,21 +4736,185 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_html(self.auth_page(tab="reg"))
                 return
 
-            # ── Publiczny link do pobrania pliku ─────────
+            # ── Publiczny link — strona z odliczaniem ────
             if p.path.startswith("/s/"):
                 token = p.path[3:]
                 share = get_share(token)
                 if not share:
-                    self.send_html("<html><body style='font-family:sans-serif;background:#0a0c14;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'><div style='text-align:center'><h2>❌ Link wygasł lub nie istnieje</h2><p style='color:#7d8590'>Ten link został już użyty lub minął jego termin ważności.</p></div></body></html>", 410)
+                    self.send_html("<html><body style='font-family:sans-serif;background:#09090b;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'><div style='text-align:center'><h2>\u274c Link wygas\u0142 lub nie istnieje</h2><p style='color:#7d8590'>Ten link zosta\u0142 ju\u017c u\u017cyty lub min\u0105\u0142 jego termin wa\u017cno\u015bci.</p></div></body></html>", 410)
                     return
                 owner_dir = user_storage(share["owner"])
                 fpath = safe_path(owner_dir, share["path"])
                 if not fpath or not fpath.is_file():
-                    self.send_html("<html><body style='font-family:sans-serif;background:#0a0c14;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'><div style='text-align:center'><h2>❌ Plik nie istnieje</h2><p style='color:#7d8590'>Plik mógł zostać usunięty.</p></div></body></html>", 404)
+                    self.send_html("<html><body style='font-family:sans-serif;background:#09090b;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'><div style='text-align:center'><h2>\u274c Plik nie istnieje</h2><p style='color:#7d8590'>Plik m\u00f3g\u0142 zosta\u0107 usuni\u0119ty.</p></div></body></html>", 404)
                     return
-                # zarejestruj pobranie i usuń token (jednorazowy)
+                fname_esc   = html.escape(share["name"])
+                fsize_esc   = html.escape(human_size(fpath.stat().st_size))
+                expires     = share.get("expires")
+                now_ts      = time.time()
+
+                # Ikona SVG dopasowana do rozszerzenia
+                _ext = Path(share["name"]).suffix.lower()
+                _ic  = "var(--acc)"
+                if _ext in {".jpg",".jpeg",".png",".gif",".webp",".svg",".avif"}:
+                    file_icon_svg = f'<svg viewBox="0 0 24 24" fill="none" stroke="{_ic}" stroke-width="1.4" width="36" height="36"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>'
+                elif _ext in {".mp4",".avi",".mov",".mkv",".webm",".m4v"}:
+                    file_icon_svg = f'<svg viewBox="0 0 24 24" fill="none" stroke="{_ic}" stroke-width="1.4" width="36" height="36"><rect x="2" y="4" width="15" height="16" rx="2"/><path d="M17 8l5-3v14l-5-3V8z"/></svg>'
+                elif _ext in {".mp3",".wav",".flac",".ogg",".aac",".m4a",".opus"}:
+                    file_icon_svg = f'<svg viewBox="0 0 24 24" fill="none" stroke="{_ic}" stroke-width="1.4" width="36" height="36"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>'
+                elif _ext == ".pdf":
+                    file_icon_svg = f'<svg viewBox="0 0 24 24" fill="none" stroke="{_ic}" stroke-width="1.4" width="36" height="36"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h4"/></svg>'
+                elif _ext in {".zip",".rar",".7z",".tar",".gz",".bz2"}:
+                    file_icon_svg = f'<svg viewBox="0 0 24 24" fill="none" stroke="{_ic}" stroke-width="1.4" width="36" height="36"><rect x="2" y="4" width="20" height="5" rx="1"/><path d="M4 9v11a2 2 0 002 2h12a2 2 0 002-2V9"/><path d="M10 13h4"/></svg>'
+                elif _ext in {".doc",".docx",".odt"}:
+                    file_icon_svg = f'<svg viewBox="0 0 24 24" fill="none" stroke="{_ic}" stroke-width="1.4" width="36" height="36"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6M9 17h6"/></svg>'
+                elif _ext in {".xls",".xlsx",".csv"}:
+                    file_icon_svg = f'<svg viewBox="0 0 24 24" fill="none" stroke="{_ic}" stroke-width="1.4" width="36" height="36"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18"/></svg>'
+                elif _ext in {".py",".js",".ts",".html",".css",".json",".xml",".sh",".cpp",".c",".java",".go",".rs"}:
+                    file_icon_svg = f'<svg viewBox="0 0 24 24" fill="none" stroke="{_ic}" stroke-width="1.4" width="36" height="36"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>'
+                else:
+                    file_icon_svg = f'<svg viewBox="0 0 24 24" fill="none" stroke="{_ic}" stroke-width="1.4" width="36" height="36"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>'
+                now_ts      = time.time()
+                # Zbuduj odliczanie
+                if expires:
+                    remaining   = max(0, int(expires - now_ts))
+                    expire_iso  = datetime.fromtimestamp(expires).strftime("%d.%m.%Y %H:%M:%S")
+                    countdown_js = f"""
+var _exp={int(expires)};
+function _tick(){{
+  var left=_exp-Math.floor(Date.now()/1000);
+  if(left<=0){{document.getElementById('cdtimer').textContent='Link wygasł!';
+    document.getElementById('dlbtn').disabled=true;return;}}
+  var h=Math.floor(left/3600),m=Math.floor((left%3600)/60),s=left%60;
+  document.getElementById('cdtimer').textContent=
+    (h?h+'h ':'')+((m<10&&h)?'0':'')+m+'m '+(s<10?'0':'')+s+'s';
+  setTimeout(_tick,1000);
+}}
+_tick();"""
+                    expires_line = f'<div class="cd-expire">Wygasa: <b>{expire_iso}</b></div>'
+                    timer_block  = f'<div class="cd-timer" id="cdtimer"></div>'
+                else:
+                    countdown_js = ""
+                    expires_line = '<div class="cd-expire" style="color:#3fb950">Link bezterminowy</div>'
+                    timer_block  = ""
+
+                page = f"""<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pobierz: {fname_esc}</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg viewBox='0 0 38 22' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z' stroke='%23818cf8' stroke-width='1.6' stroke-linejoin='round' fill='rgba(129,140,248,0.12)'/%3E%3C/svg%3E">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Audiowide&display=swap" rel="stylesheet">
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+:root{{--bg:#09090b;--sur:#18181b;--brd:#27272a;--txt:#e6edf3;--muted:#7d8590;--acc:#e2e8f0;--acc2:#94a3b8;
+  --gr1:rgba(148,163,184,.22);--gr2:rgba(100,116,139,.12);--gr3:rgba(71,85,105,.10);--gr4:rgba(51,65,85,.08)}}
+body{{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--txt);
+  min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;
+  background-image:none}}
+.card{{background:var(--sur);border:1px solid var(--brd);border-radius:20px;padding:36px 32px;
+  max-width:400px;width:100%;text-align:center;box-shadow:0 24px 64px rgba(0,0,0,.6);position:relative;z-index:1}}
+/* Logo */
+.sc-logo{{display:flex;align-items:center;justify-content:center;gap:9px;
+  font-family:'Audiowide',sans-serif;font-size:15px;font-weight:700;letter-spacing:.04em;
+  color:var(--txt);margin-bottom:28px}}
+.sc-logo-mark{{width:32px;height:20px;flex-shrink:0}}
+/* Ikona pliku */
+.file-icon-wrap{{
+  width:72px;height:72px;border-radius:18px;margin:0 auto 18px;
+  display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,rgba(79,70,229,.2),rgba(129,140,248,.1));
+  border:1px solid rgba(129,140,248,.2);
+}}
+/* Nazwa i rozmiar */
+.fname{{font-size:15px;font-weight:600;word-break:break-all;margin-bottom:5px;line-height:1.4}}
+.fsize{{font-size:12px;color:var(--muted);margin-bottom:22px}}
+/* Separator */
+.sep{{height:1px;background:var(--brd);margin:0 0 20px}}
+/* Wygaśnięcie */
+.cd-expire{{font-size:12px;color:var(--muted);margin-bottom:6px}}
+.cd-expire b{{color:var(--txt)}}
+.cd-timer{{font-size:30px;font-weight:700;color:var(--acc);font-variant-numeric:tabular-nums;
+  letter-spacing:.06em;margin-bottom:22px;min-height:38px}}
+/* Przycisk */
+.dlbtn{{display:inline-flex;align-items:center;gap:9px;padding:13px 32px;width:100%;justify-content:center;
+  background:linear-gradient(135deg,var(--acc2),var(--acc));color:#fff;
+  font-family:inherit;font-size:14px;font-weight:600;border:none;border-radius:12px;
+  cursor:pointer;text-decoration:none;transition:opacity .15s,transform .1s;
+  box-shadow:0 4px 20px rgba(79,70,229,.4)}}
+.dlbtn:hover{{opacity:.9;transform:translateY(-1px)}}
+.dlbtn:disabled{{opacity:.35;cursor:not-allowed;transform:none}}
+/* Footer */
+.footer{{margin-top:20px;font-size:11px;color:#3d4555;display:flex;align-items:center;justify-content:center;gap:5px}}
+.footer svg{{opacity:.4}}
+</style>
+</head>
+<body>
+<div class="card">
+
+  <!-- Logo -->
+  <div class="sc-logo">
+    <svg class="sc-logo-mark" viewBox="0 0 38 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z"
+            stroke="var(--acc)" stroke-width="1.6" stroke-linejoin="round" fill="rgba(129,140,248,0.08)"/>
+      <path d="M11 8.5a3.5 3.5 0 012.2-3.2"
+            stroke="var(--acc)" stroke-width="1.1" stroke-linecap="round" opacity=".35"/>
+    </svg>
+    SAFE CLOUD
+  </div>
+
+  <!-- Ikona pliku -->
+  <div class="file-icon-wrap">
+    {file_icon_svg}
+  </div>
+
+  <div class="fname">{fname_esc}</div>
+  <div class="fsize">{fsize_esc}</div>
+
+  <div class="sep"></div>
+
+  {expires_line}
+  {timer_block}
+
+  <a class="dlbtn" id="dlbtn" href="/dl/{token}">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" width="16" height="16">
+      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+      <polyline points="7 10 12 15 17 10"/>
+      <line x1="12" y1="15" x2="12" y2="3"/>
+    </svg>
+    Pobierz plik
+  </a>
+
+  <div class="footer">
+    <svg viewBox="0 0 38 22" width="18" height="11" fill="none">
+      <path d="M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z"
+            stroke="#818cf8" stroke-width="1.6" stroke-linejoin="round" fill="rgba(129,140,248,0.08)"/>
+    </svg>
+    Udost\u0119pniono przez SAFE CLOUD
+  </div>
+</div>
+<script>{countdown_js}</script>
+{BG_ANIMATION_JS}
+</body>
+</html>"""
+                self.send_html(page)
+                return
+
+            # ── Faktyczne pobranie pliku przez link ──────
+            if p.path.startswith("/dl/"):
+                token = p.path[4:]
+                share = get_share(token)
+                if not share:
+                    self.send_html("<html><body style='font-family:sans-serif;background:#09090b;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'><div style='text-align:center'><h2>\u274c Link wygas\u0142 lub nie istnieje</h2></div></body></html>", 410)
+                    return
+                owner_dir = user_storage(share["owner"])
+                fpath = safe_path(owner_dir, share["path"])
+                if not fpath or not fpath.is_file():
+                    self.send_html("<html><body style='font-family:sans-serif;background:#09090b;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'><div style='text-align:center'><h2>\u274c Plik nie istnieje</h2></div></body></html>", 404)
+                    return
                 delete_share(token)
-                print(f"[SHARE] Pobrano: {share['name']} (właściciel: {share['owner']}, IP: {self.client_address[0]})")
+                print(f"[SHARE] Pobrano: {share['name']} (w\u0142a\u015bciciel: {share['owner']}, IP: {self.client_address[0]})")
                 mime, _ = mimetypes.guess_type(str(fpath))
                 mime = mime or "application/octet-stream"
                 size = fpath.stat().st_size
@@ -2999,8 +4935,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
             udir = user_storage(username)
 
+            if p.path == "/2fa/setup":
+                username = self.require_auth()
+                if not username: return
+                secret = totp_generate_secret()
+                uri    = totp_get_uri(username, secret)
+                self.send_json({"ok": True, "secret": secret, "uri": uri,
+                                "enabled": totp_is_enabled(username)})
+                return
+
             if p.path == "/stats":
-                if not (is_admin(username) or is_owner(username)):
+                if not (is_admin(username) or is_owner(username) or is_moderator(username)):
                     self.send_response(403); self.end_headers(); return
                 data = json.dumps(get_stats()).encode("utf-8")
                 self.send_response(200)
@@ -3034,13 +4979,49 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 mime, _ = mimetypes.guess_type(str(target))
                 mime = mime or "application/octet-stream"
                 size = target.stat().st_size
-                self.send_response(200)
-                self.send_header("Content-Type", mime)
-                self.send_header("Content-Length", str(size))
-                self.send_header("Content-Disposition", f'inline; filename="{target.name}"')
-                self.end_headers()
-                with open(target, "rb") as f:
-                    shutil.copyfileobj(f, self.wfile)
+                fname_disp = urllib.parse.quote(target.name)
+
+                range_header = self.headers.get("Range", "")
+                if range_header and range_header.startswith("bytes="):
+                    # ── HTTP Range Request (strumieniowanie wideo) ──
+                    try:
+                        rng = range_header[6:]
+                        start_s, end_s = rng.split("-", 1)
+                        start = int(start_s) if start_s else 0
+                        end   = int(end_s)   if end_s   else size - 1
+                        end   = min(end, size - 1)
+                        if start > end or start >= size:
+                            self.send_response(416)
+                            self.send_header("Content-Range", f"bytes */{size}")
+                            self.end_headers(); return
+                        chunk = end - start + 1
+                        self.send_response(206)
+                        self.send_header("Content-Type", mime)
+                        self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+                        self.send_header("Content-Length", str(chunk))
+                        self.send_header("Accept-Ranges", "bytes")
+                        self.send_header("Content-Disposition", f'inline; filename*=UTF-8\'\'{fname_disp}')
+                        self.end_headers()
+                        with open(target, "rb") as f:
+                            f.seek(start)
+                            remaining = chunk
+                            while remaining > 0:
+                                buf = f.read(min(65536, remaining))
+                                if not buf: break
+                                self.wfile.write(buf)
+                                remaining -= len(buf)
+                    except Exception:
+                        self.send_response(400); self.end_headers()
+                else:
+                    # ── Pełny plik ──
+                    self.send_response(200)
+                    self.send_header("Content-Type", mime)
+                    self.send_header("Content-Length", str(size))
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.send_header("Content-Disposition", f'inline; filename*=UTF-8\'\'{fname_disp}')
+                    self.end_headers()
+                    with open(target, "rb") as f:
+                        shutil.copyfileobj(f, self.wfile)
 
             elif p.path == "/thumb":
                 sub    = q.get("path", [""])[0].strip("/")
@@ -3195,13 +5176,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 uname = data.get("username", "").strip()
                 pw    = data.get("password", "")
                 users = load_users()
-                if uname in users and get_user_password(users, uname) == hash_password(pw):
+                stored = get_user_password(users, uname) if uname in users else None
+                ok, new_hash = verify_password(pw, stored) if stored else (False, None)
+                if ok:
+                    # Migracja hasła ze starego SHA-256 do PBKDF2
+                    if new_hash:
+                        if isinstance(users[uname], dict):
+                            users[uname]["password"] = new_hash
+                        else:
+                            users[uname] = {"password": new_hash, "role": None}
+                        save_users(users)
                     ban = get_ban(uname)
                     if ban:
                         reason = ban.get("reason", "Brak powodu.")
                         human  = ban.get("human", "")
                         msg = f"Twoje konto jest zablokowane ({human}). Powód: {reason}"
                         self.send_html(self.auth_page(msg, "login"))
+                        return
+                    # Sprawdź 2FA
+                    if totp_is_enabled(uname):
+                        pending = totp_pending_create(uname)
+                        self.send_html(self.totp_page(pending))
                         return
                     token  = create_session(uname)
                     cookie = f"session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL}"
@@ -3237,7 +5232,193 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 user_storage(uname)
                 token  = create_session(uname)
                 cookie = f"session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL}"
+                # Pokaż stronę z pytaniem o 2FA zamiast od razu przekierowywać
+                page = self.setup_2fa_prompt_page(token)
+                b = page.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(b)))
+                self.send_header("Set-Cookie", cookie)
+                self.end_headers()
+                self.wfile.write(b)
+                return
+
+            if p.path == "/totp-verify":
+                n    = int(self.headers.get("Content-Length", 0))
+                data = parse_form_body(self.rfile.read(n))
+                pending = data.get("pending", "")
+                code    = data.get("code", "").strip().replace(" ", "")
+                uname   = totp_pending_get(pending)
+                if not uname:
+                    self.send_html(self.auth_page("Sesja weryfikacji wygasła. Zaloguj się ponownie.", "login"))
+                    return
+                secret = totp_get_secret(uname)
+                if not secret or not totp_verify(secret, code):
+                    self.send_html(self.totp_page(pending, error="Nieprawidłowy kod. Spróbuj ponownie."))
+                    return
+                totp_pending_del(pending)
+                token  = create_session(uname)
+                cookie = f"session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL}"
                 redirect(self, "/", cookie)
+                return
+
+            if p.path == "/2fa/setup-register":
+                username = self.require_auth()
+                if not username: return
+                n    = int(self.headers.get("Content-Length", 0))
+                try:
+                    data = json.loads(self.rfile.read(n))
+                except Exception:
+                    self.send_json({"ok": False, "error": "Błąd danych"}); return
+                code   = str(data.get("code", "")).strip().replace(" ", "")
+                secret = str(data.get("secret", "")).strip()
+                if not secret or not code:
+                    self.send_json({"ok": False, "error": "Brak danych"}); return
+                if not totp_verify(secret, code):
+                    self.send_json({"ok": False, "error": "Nieprawidłowy kod — sprawdź czy zegar jest zsynchronizowany"}); return
+                totp_enable(username, secret)
+                print(f"[2FA] Włączono 2FA dla nowego użytkownika: {username}")
+                self.send_json({"ok": True})
+                return
+
+            if p.path == "/2fa/setup":
+                username = self.require_auth()
+                if not username: return
+                n    = int(self.headers.get("Content-Length", 0))
+                data = parse_form_body(self.rfile.read(n))
+                code   = data.get("code", "").strip().replace(" ", "")
+                secret = data.get("secret", "").strip()
+                if not secret or not code:
+                    self.send_json({"ok": False, "error": "Brak danych"})
+                    return
+                if not totp_verify(secret, code):
+                    self.send_json({"ok": False, "error": "Nieprawidłowy kod — sprawdź czy zegar jest zsynchronizowany"})
+                    return
+                totp_enable(username, secret)
+                self.send_json({"ok": True})
+                return
+
+            if p.path == "/2fa/disable":
+                username = self.require_auth()
+                if not username: return
+                n    = int(self.headers.get("Content-Length", 0))
+                data = parse_form_body(self.rfile.read(n))
+                pw   = data.get("password", "")
+                users = load_users()
+                ok, _ = verify_password(pw, get_user_password(users, username) or "")
+                if not ok:
+                    self.send_json({"ok": False, "error": "Nieprawidłowe hasło"})
+                    return
+                totp_disable(username)
+                self.send_json({"ok": True})
+                return
+
+            if p.path == "/settings/change-password":
+                username = self.require_auth()
+                if not username: return
+                n    = int(self.headers.get("Content-Length", 0))
+                data = parse_form_body(self.rfile.read(n))
+                old_pw  = data.get("old_password", "")
+                new_pw  = data.get("new_password", "")
+                new_pw2 = data.get("new_password2", "")
+                users = load_users()
+                ok, _ = verify_password(old_pw, get_user_password(users, username) or "")
+                if not ok:
+                    self.send_json({"ok": False, "error": "Nieprawidłowe aktualne hasło"}); return
+                if len(new_pw) < 4:
+                    self.send_json({"ok": False, "error": "Nowe hasło musi mieć min. 4 znaki"}); return
+                if new_pw != new_pw2:
+                    self.send_json({"ok": False, "error": "Hasła nie są identyczne"}); return
+                v = users[username]
+                if isinstance(v, dict): users[username]["password"] = hash_password(new_pw)
+                else: users[username] = {"password": hash_password(new_pw), "role": None}
+                save_users(users)
+                # wyloguj inne sesje
+                token_cur = get_token_from_request(self)
+                to_del = [t for t,s in sessions.items() if s["username"]==username and t!=token_cur]
+                for t in to_del: del sessions[t]
+                self.send_json({"ok": True})
+                return
+
+            if p.path == "/settings/change-username":
+                username = self.require_auth()
+                if not username: return
+                if is_admin(username) or is_owner(username):
+                    self.send_json({"ok": False, "error": "Admin i owner nie mogą zmieniać nazwy"}); return
+                n    = int(self.headers.get("Content-Length", 0))
+                data = parse_form_body(self.rfile.read(n))
+                new_name = data.get("new_username", "").strip()
+                pw       = data.get("password", "")
+                users = load_users()
+                ok, _ = verify_password(pw, get_user_password(users, username) or "")
+                if not ok:
+                    self.send_json({"ok": False, "error": "Nieprawidłowe hasło"}); return
+                if not new_name or not all(c.isalnum() or c in "_-" for c in new_name):
+                    self.send_json({"ok": False, "error": "Niedozwolone znaki w nazwie"}); return
+                if len(new_name) > 32:
+                    self.send_json({"ok": False, "error": "Nazwa max 32 znaki"}); return
+                if new_name in users:
+                    self.send_json({"ok": False, "error": "Ta nazwa jest już zajęta"}); return
+                if new_name.lower() == ADMIN_USER.lower():
+                    self.send_json({"ok": False, "error": "Ta nazwa jest zarezerwowana"}); return
+                # przenieś dane
+                users[new_name] = users.pop(username)
+                save_users(users)
+                # przenieś folder
+                old_dir = STORAGE_DIR / username
+                new_dir = STORAGE_DIR / new_name
+                if old_dir.exists(): shutil.move(str(old_dir), str(new_dir))
+                # przenieś 2FA
+                totp_d = _totp_load()
+                if username in totp_d:
+                    totp_d[new_name] = totp_d.pop(username)
+                    _totp_save(totp_d)
+                # wyloguj stare sesje
+                to_del = [t for t,s in sessions.items() if s["username"]==username]
+                for t in to_del: del sessions[t]
+                # zaloguj ponownie z nową nazwą
+                new_token = create_session(new_name)
+                cookie = f"session={new_token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL}"
+                self.send_response(200)
+                self.send_header("Content-Type","application/json")
+                self.send_header("Set-Cookie", cookie)
+                resp = json.dumps({"ok": True}).encode()
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
+                return
+
+            if p.path == "/settings/delete-account":
+                username = self.require_auth()
+                if not username: return
+                if is_admin(username) or is_owner(username):
+                    self.send_json({"ok": False, "error": "Admin i owner nie mogą usunąć konta"}); return
+                n    = int(self.headers.get("Content-Length", 0))
+                data = parse_form_body(self.rfile.read(n))
+                pw           = data.get("password", "")
+                delete_files = data.get("delete_files", "0") == "1"
+                users = load_users()
+                ok, _ = verify_password(pw, get_user_password(users, username) or "")
+                if not ok:
+                    self.send_json({"ok": False, "error": "Nieprawidłowe hasło"}); return
+                del users[username]
+                save_users(users)
+                # wyloguj
+                to_del = [t for t,s in sessions.items() if s["username"]==username]
+                for t in to_del: del sessions[t]
+                bans.pop(username, None); save_bans()
+                totp_disable(username)
+                if delete_files:
+                    user_dir = STORAGE_DIR / username
+                    if user_dir.exists(): shutil.rmtree(user_dir)
+                cookie = "session=; Path=/; Max-Age=0"
+                self.send_response(200)
+                self.send_header("Content-Type","application/json")
+                self.send_header("Set-Cookie", cookie)
+                resp = json.dumps({"ok": True}).encode()
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
                 return
 
             if p.path == "/logout":
@@ -3265,145 +5446,160 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         break
                 if not boundary:
                     return self.send_json({"ok": False, "error": "Brak boundary"})
+
                 length = int(self.headers.get("Content-Length", 0))
-                body   = self.rfile.read(length)
+                delim      = b"--" + boundary.encode()
+                delim_end  = delim + b"--"
+                CHUNK      = 256 * 1024  # 256 KB chunks
+
+                # ── Streamingowy parser multipart ────────────────
+                # Czyta dane partiami i pisze plik bezpośrednio na
+                # dysk — nigdy nie trzyma całego pliku w RAM.
 
                 sub_path = ""
                 fname    = None
-                fdata    = None
+                out_path = None
+                fout     = None
+                state    = "PREAMBLE"   # PREAMBLE → HEADERS → FIELD_PATH | FILE_DATA
+                buf      = b""
+                bytes_read = 0
+                error    = None
 
-                delim = b"--" + boundary.encode()
-                raw_parts = body.split(delim)
-                for i, part in enumerate(raw_parts[1:]):
-                    if part in (b"--", b"--\r\n", b"\r\n--", b""):
-                        continue
-                    if part.startswith(b"--"):
-                        continue
-                    if part.startswith(b"\r\n"):
-                        part = part[2:]
-                    if part.endswith(b"\r\n"):
-                        part = part[:-2]
-                    sep = part.find(b"\r\n\r\n")
-                    if sep == -1:
-                        continue
-                    headers_raw = part[:sep].decode("utf-8", errors="replace")
-                    content     = part[sep + 4:]
+                def flush_file():
+                    nonlocal fout, out_path
+                    if fout:
+                        try: fout.close()
+                        except: pass
+                        fout = None
 
-                    disp = ""
-                    for hline in headers_raw.splitlines():
-                        if hline.lower().startswith("content-disposition"):
-                            disp = hline
+                try:
+                    while bytes_read < length:
+                        to_read = min(CHUNK, length - bytes_read)
+                        chunk   = self.rfile.read(to_read)
+                        if not chunk:
                             break
+                        bytes_read += len(chunk)
+                        buf += chunk
 
-                    field    = ""
-                    filename = ""
-                    for tok in disp.split(";"):
-                        tok = tok.strip()
-                        if tok.lower().startswith("name="):
-                            field = tok[5:].strip('"\'')
-                        elif tok.lower().startswith("filename="):
-                            filename = tok[9:].strip('"\'')
+                        while True:
+                            if state == "PREAMBLE":
+                                idx = buf.find(delim)
+                                if idx == -1:
+                                    buf = buf[-len(delim):]
+                                    break
+                                buf = buf[idx + len(delim):]
+                                if buf.startswith(b"--"):
+                                    break  # koniec
+                                if buf.startswith(b"\r\n"):
+                                    buf   = buf[2:]
+                                    state = "HEADERS"
+                                else:
+                                    break
 
-                    if field == "path":
-                        sub_path = content.decode("utf-8", errors="replace").strip("/")
-                    elif field == "file" and filename:
-                        fname = Path(filename).name
-                        fdata = content
-                if not fname or fdata is None:
+                            elif state == "HEADERS":
+                                end = buf.find(b"\r\n\r\n")
+                                if end == -1:
+                                    break
+                                headers_raw = buf[:end].decode("utf-8", errors="replace")
+                                buf = buf[end + 4:]
+
+                                disp = ""
+                                for hline in headers_raw.splitlines():
+                                    if hline.lower().startswith("content-disposition"):
+                                        disp = hline
+                                        break
+                                field = filename = ""
+                                for tok in disp.split(";"):
+                                    tok = tok.strip()
+                                    if tok.lower().startswith("name="):
+                                        field = tok[5:].strip('"\'')
+                                    elif tok.lower().startswith("filename="):
+                                        filename = tok[9:].strip('"\'')
+
+                                if field == "path":
+                                    state = "FIELD_PATH"
+                                elif field == "file" and filename:
+                                    fname = Path(filename).name
+                                    # Przygotuj plik docelowy
+                                    tdir = safe_path(udir, sub_path)
+                                    if not tdir:
+                                        error = "Zla sciezka"
+                                        break
+                                    tdir.mkdir(parents=True, exist_ok=True)
+                                    stem   = Path(fname).stem
+                                    suffix = Path(fname).suffix
+                                    out_path = tdir / fname
+                                    counter = 1
+                                    while out_path.exists():
+                                        out_path = tdir / f"{stem} ({counter}){suffix}"
+                                        counter += 1
+                                    fout  = open(out_path, "wb")
+                                    state = "FILE_DATA"
+                                else:
+                                    state = "PREAMBLE"  # nieznane pole — pomiń
+
+                            elif state == "FIELD_PATH":
+                                idx = buf.find(b"\r\n" + delim)
+                                if idx == -1:
+                                    break
+                                sub_path = buf[:idx].decode("utf-8", errors="replace").strip("/")
+                                buf   = buf[idx + 2 + len(delim):]
+                                if buf.startswith(b"--"):
+                                    break
+                                if buf.startswith(b"\r\n"):
+                                    buf   = buf[2:]
+                                    state = "HEADERS"
+                                else:
+                                    state = "PREAMBLE"
+
+                            elif state == "FILE_DATA":
+                                sep = b"\r\n" + delim
+                                idx = buf.find(sep)
+                                if idx != -1:
+                                    # Koniec danych pliku
+                                    if fout:
+                                        fout.write(buf[:idx])
+                                    flush_file()
+                                    buf   = buf[idx + 2 + len(delim):]
+                                    if buf.startswith(b"--"):
+                                        break  # koniec requestu
+                                    if buf.startswith(b"\r\n"):
+                                        buf   = buf[2:]
+                                        state = "HEADERS"
+                                    else:
+                                        state = "PREAMBLE"
+                                else:
+                                    # Bufor nie zawiera jeszcze separatora —
+                                    # pisz bezpiecznie trzymając ogon (len(sep)-1)
+                                    safe = len(buf) - len(sep)
+                                    if safe > 0:
+                                        if fout:
+                                            fout.write(buf[:safe])
+                                        buf = buf[safe:]
+                                    break
+                            else:
+                                break
+
+                except Exception as e:
+                    flush_file()
+                    if out_path and out_path.exists():
+                        try: out_path.unlink()
+                        except: pass
+                    return self.send_json({"ok": False, "error": f"Blad uploadu: {e}"})
+
+                flush_file()
+
+                if error:
+                    if out_path and out_path.exists():
+                        try: out_path.unlink()
+                        except: pass
+                    return self.send_json({"ok": False, "error": error})
+
+                if not fname or not out_path or not out_path.exists():
                     return self.send_json({"ok": False, "error": "Brak pliku w zadaniu"})
-                tdir = safe_path(udir, sub_path)
-                if not tdir:
-                    return self.send_json({"ok": False, "error": "Zla sciezka"})
-                tdir.mkdir(parents=True, exist_ok=True)
-                # jeśli plik już istnieje, dodaj (1), (2) itd.
-                stem = Path(fname).stem
-                suffix = Path(fname).suffix
-                out = tdir / fname
-                counter = 1
-                while out.exists():
-                    out = tdir / f"{stem} ({counter}){suffix}"
-                    counter += 1
-                out.write_bytes(fdata)
-                print(f"[UPLOAD] saved: {out}")
-                self.send_json({"ok": True, "name": out.name})
-                ct = self.headers.get("Content-Type", "")
-                if "multipart/form-data" not in ct:
-                    return self.send_json({"ok": False, "error": "Zly content-type"})
-                boundary = None
-                for tok in ct.split(";"):
-                    tok = tok.strip()
-                    if tok.startswith("boundary="):
-                        boundary = tok[9:].strip('"\'')
-                        break
-                if not boundary:
-                    return self.send_json({"ok": False, "error": "Brak boundary"})
-                length = int(self.headers.get("Content-Length", 0))
-                body   = self.rfile.read(length)
 
-                sub_path = ""
-                fname    = None
-                fdata    = None
-
-                delim = b"--" + boundary.encode()
-                # dzielimy po delimitach, pomijamy pierwszy pusty i ostatni (--)
-                raw_parts = body.split(delim)
-                for part in raw_parts[1:]:
-                    # każda część zaczyna się od \r\n, kończy \r\n
-                    if part in (b"--", b"--\r\n", b"\r\n--", b""):
-                        continue
-                    if part.startswith(b"--"):
-                        continue
-                    # odetnij wiodący \r\n
-                    if part.startswith(b"\r\n"):
-                        part = part[2:]
-                    # odetnij końcowy \r\n
-                    if part.endswith(b"\r\n"):
-                        part = part[:-2]
-                    # znajdź koniec nagłówków
-                    sep = part.find(b"\r\n\r\n")
-                    if sep == -1:
-                        continue
-                    headers_raw = part[:sep].decode("utf-8", errors="replace")
-                    content     = part[sep + 4:]
-
-                    # parsuj Content-Disposition
-                    disp = ""
-                    for hline in headers_raw.splitlines():
-                        if hline.lower().startswith("content-disposition"):
-                            disp = hline
-                            break
-
-                    field    = ""
-                    filename = ""
-                    for tok in disp.split(";"):
-                        tok = tok.strip()
-                        if tok.lower().startswith("name="):
-                            field = tok[5:].strip('"\'')
-                        elif tok.lower().startswith("filename="):
-                            filename = tok[9:].strip('"\'')
-
-                    if field == "path":
-                        sub_path = content.decode("utf-8", errors="replace").strip("/")
-                    elif field == "file" and filename:
-                        fname = Path(filename).name
-                        fdata = content
-
-                if not fname or fdata is None:
-                    return self.send_json({"ok": False, "error": "Brak pliku w zadaniu"})
-                tdir = safe_path(udir, sub_path)
-                if not tdir:
-                    return self.send_json({"ok": False, "error": "Zla sciezka"})
-                tdir.mkdir(parents=True, exist_ok=True)
-                # jeśli plik już istnieje, dodaj (1), (2) itd.
-                stem = Path(fname).stem
-                suffix = Path(fname).suffix
-                out = tdir / fname
-                counter = 1
-                while out.exists():
-                    out = tdir / f"{stem} ({counter}){suffix}"
-                    counter += 1
-                out.write_bytes(fdata)
-                self.send_json({"ok": True, "name": out.name})
+                print(f"[UPLOAD] saved: {out_path}")
+                self.send_json({"ok": True, "name": out_path.name})
 
             elif p.path == "/delete":
                 n    = int(self.headers.get("Content-Length", 0))
@@ -3586,6 +5782,10 @@ def _session_cleanup_loop():
                    if not attempts or now - max(attempts) > LOGIN_WINDOW_SEC * 2]
         for ip in old_ips:
             login_attempts.pop(ip, None)
+        # Wyczyść wygasłe tokeny TOTP pending (2FA w trakcie logowania)
+        expired_totp = [t for t, (u, exp) in list(_totp_pending.items()) if now > exp]
+        for t in expired_totp:
+            _totp_pending.pop(t, None)
 
 def _fmt_bytes(n):
     for u in ["B","KB","MB","GB"]:
@@ -3595,6 +5795,7 @@ def _fmt_bytes(n):
 
 _ngrok_proc_cache = None
 _disk_io_prev = None   # (timestamp, read_bytes, write_bytes)
+_net_io_prev  = None   # (timestamp, bytes_sent, bytes_recv)
 
 def get_stats():
     """Zwraca slownik z aktualnymi statystykami procesu."""
@@ -3624,10 +5825,31 @@ def get_stats():
             _disk_io_prev = (now_io, dio.read_bytes, dio.write_bytes)
         except:
             disk_r = disk_w = None
+        # Sieć
+        try:
+            global _net_io_prev
+            nio = psutil.net_io_counters()
+            now_net = time.time()
+            if _net_io_prev is not None:
+                prev_nt, prev_s, prev_r = _net_io_prev
+                dt_net = now_net - prev_nt
+                if dt_net > 0:
+                    rate_s = (nio.bytes_sent - prev_s) / dt_net
+                    rate_r2 = (nio.bytes_recv - prev_r) / dt_net
+                    net_up   = _fmt_bytes(rate_s)   + "/s" if rate_s   > 0 else None
+                    net_down = _fmt_bytes(rate_r2)  + "/s" if rate_r2  > 0 else None
+                else:
+                    net_up = net_down = None
+            else:
+                net_up = net_down = None
+            _net_io_prev = (now_net, nio.bytes_sent, nio.bytes_recv)
+        except:
+            net_up = net_down = None
         now_t = time.time()
         ram_mb = mem.rss / (1024 * 1024)
-        # RAM ngrok – zsumuj z RAM serwera (cache procesu)
+        # RAM cloudflared/ngrok
         ngrok_rss = 0
+        cloudflared_rss = 0
         try:
             global _ngrok_proc_cache
             proc_ok = False
@@ -3635,16 +5857,24 @@ def get_stats():
                 try:
                     if _ngrok_proc_cache.is_running():
                         ngrok_rss = _ngrok_proc_cache.memory_info().rss
+                        if 'cloudflared' in _ngrok_proc_cache.name().lower():
+                            cloudflared_rss = ngrok_rss
                         proc_ok = True
                 except: _ngrok_proc_cache = None
             if not proc_ok:
                 for p in psutil.process_iter(['name', 'memory_info']):
-                    if 'ngrok' in p.info['name'].lower():
+                    pname = p.info['name'].lower()
+                    if 'cloudflared' in pname:
+                        _ngrok_proc_cache = p
+                        ngrok_rss = p.info['memory_info'].rss
+                        cloudflared_rss = ngrok_rss
+                        break
+                    elif 'ngrok' in pname:
                         _ngrok_proc_cache = p
                         ngrok_rss = p.info['memory_info'].rss
                         break
         except: pass
-        total_rss = mem.rss + ngrok_rss
+        total_rss = mem.rss
         total_mb  = total_rss / (1024 * 1024)
         result = {
             "ok":        True,
@@ -3660,6 +5890,9 @@ def get_stats():
             "disk_w":    disk_w,
             "cache":     len(thumb_cache),
             "sessions":  sum(1 for s in sessions.values() if s["expires"] > now_t),
+            "cloudflared_ram": _fmt_bytes(cloudflared_rss) if cloudflared_rss else "—",
+            "net_up":   net_up,
+            "net_down": net_down,
         }
     except ImportError:
         result = {"ok": False, "error": "psutil niedostepny"}
@@ -3818,13 +6051,55 @@ CONSOLE_HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Konsola – SAFE CLOUD</title>
-<link rel="icon" type="image/svg+xml" href="https://media.lordicon.com/icons/wired/gradient/53-location-pin-on-round-map.svg">
+<link rel="icon" id="dyn-favicon" type="image/svg+xml" href="">
+<script>
+(function(){
+  function makeFavicon(){
+    var acc=getComputedStyle(document.documentElement).getPropertyValue('--acc').trim()||'#e2e8f0';
+    var svg='<svg viewBox="0 0 38 22" xmlns="http://www.w3.org/2000/svg"><path d="M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z" stroke="'+acc+'" stroke-width="1.6" stroke-linejoin="round" fill="'+acc+'22"/><path d="M11 8.5a3.5 3.5 0 012.2-3.2" stroke="'+acc+'" stroke-width="1.1" stroke-linecap="round" opacity=".4"/></svg>';
+    var el=document.getElementById('dyn-favicon');
+    if(el) el.href='data:image/svg+xml,'+encodeURIComponent(svg);
+  }
+  function init(){
+    makeFavicon();
+    new MutationObserver(makeFavicon).observe(document.documentElement,{attributes:true,attributeFilter:['style','class']});
+  }
+  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}
+})();
+</script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Audiowide&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<script>
+(function(){
+  try{
+    var _s=JSON.parse(localStorage.getItem('sc_theme')||'null');
+    if(!_s) return;
+    var _DK={'Niebieski':{acc:'#818cf8',acc2:'#4f46e5',bg:'#0a0c14',sur:'#111827',brd:'#1e2535',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(79,70,229,.55)',gr2:'rgba(109,40,217,.30)',gr3:'rgba(67,56,202,.28)',gr4:'rgba(124,58,237,.20)'},'Zielony':{acc:'#34d399',acc2:'#059669',bg:'#091410',sur:'#0f1f1a',brd:'#1a3028',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(5,150,105,.50)',gr2:'rgba(4,120,87,.28)',gr3:'rgba(6,95,70,.25)',gr4:'rgba(20,83,45,.18)'},'Czerwony':{acc:'#f87171',acc2:'#dc2626',bg:'#110a0a',sur:'#1e1010',brd:'#2e1a1a',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(220,38,38,.50)',gr2:'rgba(185,28,28,.28)',gr3:'rgba(153,27,27,.25)',gr4:'rgba(127,29,29,.18)'},'Fioletowy':{acc:'#c084fc',acc2:'#9333ea',bg:'#0d0a14',sur:'#180f27',brd:'#2a1a40',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(147,51,234,.55)',gr2:'rgba(126,34,206,.30)',gr3:'rgba(107,33,168,.28)',gr4:'rgba(88,28,135,.20)'},'Mono':{acc:'#e2e8f0',acc2:'#94a3b8',bg:'#09090b',sur:'#18181b',brd:'#27272a',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(148,163,184,.22)',gr2:'rgba(100,116,139,.12)',gr3:'rgba(71,85,105,.10)',gr4:'rgba(51,65,85,.08)'},'Różowy':{acc:'#f472b6',acc2:'#db2777',bg:'#11080d',sur:'#1e0f18',brd:'#2e1a26',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(219,39,119,.50)',gr2:'rgba(190,24,93,.28)',gr3:'rgba(157,23,77,.25)',gr4:'rgba(131,24,67,.18)'}};
+    var _LT={'Niebieski':{acc:'#4f46e5',acc2:'#3730a3',bg:'#f0f2ff',sur:'#ffffff',brd:'#dde1f0',txt:'#1a1f36',muted:'#6b7280',gr1:'rgba(79,70,229,.12)',gr2:'rgba(109,40,217,.07)',gr3:'rgba(67,56,202,.06)',gr4:'rgba(124,58,237,.05)'},'Zielony':{acc:'#059669',acc2:'#047857',bg:'#f0faf6',sur:'#ffffff',brd:'#d1f0e6',txt:'#0f2a1f',muted:'#6b7280',gr1:'rgba(5,150,105,.10)',gr2:'rgba(4,120,87,.06)',gr3:'rgba(6,95,70,.05)',gr4:'rgba(20,83,45,.04)'},'Czerwony':{acc:'#dc2626',acc2:'#b91c1c',bg:'#fff0f0',sur:'#ffffff',brd:'#f0d5d5',txt:'#2a0a0a',muted:'#6b7280',gr1:'rgba(220,38,38,.10)',gr2:'rgba(185,28,28,.06)',gr3:'rgba(153,27,27,.05)',gr4:'rgba(127,29,29,.04)'},'Fioletowy':{acc:'#9333ea',acc2:'#7c3aed',bg:'#f5f0ff',sur:'#ffffff',brd:'#e2d5f5',txt:'#1a0a2e',muted:'#6b7280',gr1:'rgba(147,51,234,.10)',gr2:'rgba(126,34,206,.06)',gr3:'rgba(107,33,168,.05)',gr4:'rgba(88,28,135,.04)'},'Mono':{acc:'#334155',acc2:'#1e293b',bg:'#f8fafc',sur:'#ffffff',brd:'#e2e8f0',txt:'#0f172a',muted:'#64748b',gr1:'rgba(148,163,184,.15)',gr2:'rgba(100,116,139,.08)',gr3:'rgba(71,85,105,.06)',gr4:'rgba(51,65,85,.04)'},'Różowy':{acc:'#db2777',acc2:'#be185d',bg:'#fff0f7',sur:'#ffffff',brd:'#f0d5e8',txt:'#2a0a18',muted:'#6b7280',gr1:'rgba(219,39,119,.10)',gr2:'rgba(190,24,93,.06)',gr3:'rgba(157,23,77,.05)',gr4:'rgba(131,24,67,.04)'}};
+    var _mode=_s.mode||'dark', _name=_s.name||'Mono';
+    var t=(_mode==='light'?_LT:_DK)[_name]||(_mode==='light'?_LT:_DK)['Mono'];
+    var r=document.documentElement;
+    r.style.setProperty('--acc',  t.acc);
+    r.style.setProperty('--acc2', t.acc2);
+    r.style.setProperty('--bg',   t.bg);
+    r.style.setProperty('--sur',  t.sur);
+    r.style.setProperty('--brd',  t.brd);
+    r.style.setProperty('--txt',  t.txt||'#e6edf3');
+    r.style.setProperty('--muted',t.muted||'#7d8590');
+    r.style.setProperty('--gr1',  t.gr1);
+    r.style.setProperty('--gr2',  t.gr2);
+    r.style.setProperty('--gr3',  t.gr3);
+    r.style.setProperty('--gr4',  t.gr4);
+    r.classList.toggle('theme-mono', _name==='Mono');
+    r.classList.toggle('theme-light', _mode==='light');
+  }catch(e){}
+})();
+</script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#0a0c14;--sur:#111827;--brd:#1e2535;--txt:#e6edf3;--muted:#7d8590;--acc:#818cf8;--green:#3fb950;--yellow:#e3b341;--red:#f85149}
-body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--txt);height:100vh;display:flex;flex-direction:column;overflow:hidden}
-header{background:rgba(17,24,39,.95);border-bottom:1px solid var(--brd);padding:0 20px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+:root{--bg:#09090b;--sur:#18181b;--brd:#27272a;--txt:#e6edf3;--muted:#7d8590;--acc:#e2e8f0;--acc2:#94a3b8;--green:#3fb950;--yellow:#e3b341;--red:#f85149}
+body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--txt);height:100vh;display:flex;flex-direction:column;overflow:hidden;position:relative}
+header{background:rgba(17,24,39,.95);border-bottom:1px solid var(--brd);padding:0 20px;height:52px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;position:relative;z-index:10}
 .logo{display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px;font-family:'Audiowide',sans-serif;letter-spacing:.04em}
 .lm{width:28px;height:28px;border-radius:7px;overflow:hidden;display:flex;align-items:center;justify-content:center}
 .hright{display:flex;align-items:center;gap:12px}
@@ -3832,7 +6107,7 @@ header{background:rgba(17,24,39,.95);border-bottom:1px solid var(--brd);padding:
 .dot{width:8px;height:8px;border-radius:50%;background:var(--red);transition:background .3s}
 .dot.on{background:var(--green);box-shadow:0 0 6px var(--green)}
 .btn{font-family:inherit;font-size:12px;font-weight:500;padding:5px 12px;border-radius:7px;cursor:pointer;border:1px solid var(--brd);background:var(--sur);color:var(--txt);transition:all .15s}
-.btn:hover{background:#161d2e;border-color:#2d3a52}
+.btn:hover{background:color-mix(in srgb,var(--acc) 8%,var(--sur));border-color:var(--acc)}
 .btn-red{border-color:#6e3535;color:var(--red)}
 .btn-red:hover{background:rgba(248,81,73,.1)}
 .toolbar{display:flex;align-items:center;gap:8px;padding:8px 16px;background:var(--sur);border-bottom:1px solid var(--brd);flex-shrink:0}
@@ -3840,7 +6115,7 @@ header{background:rgba(17,24,39,.95);border-bottom:1px solid var(--brd);padding:
 .filter-btn{font-family:inherit;font-size:11px;font-weight:500;padding:3px 10px;border-radius:5px;cursor:pointer;border:1px solid var(--brd);background:transparent;color:var(--muted);transition:all .15s}
 .filter-btn.active{background:var(--bg);color:var(--txt);border-color:#2d3a52}
 .filter-btn:hover{color:var(--txt)}
-#console{flex:1;overflow-y:auto;padding:12px 0;font-family:'JetBrains Mono',monospace;font-size:12.5px;line-height:1.7;background:var(--bg)}
+#console{flex:1;overflow-y:auto;padding:12px 0;font-family:'JetBrains Mono',monospace;font-size:12.5px;line-height:1.7;background:var(--bg);position:relative;z-index:1}
 .line{padding:1px 16px;display:flex;gap:12px;align-items:flex-start;border-left:2px solid transparent;transition:background .1s}
 .line:hover{background:rgba(255,255,255,.03)}
 .ts{color:var(--muted);flex-shrink:0;font-size:11px;padding-top:2px}
@@ -3855,7 +6130,7 @@ header{background:rgba(17,24,39,.95);border-bottom:1px solid var(--brd);padding:
 .cmd-input{flex:1;font-family:'JetBrains Mono',monospace;font-size:13px;background:transparent;border:none;outline:none;color:var(--txt);caret-color:var(--acc)}
 .cmd-input::placeholder{color:#3d4a5c}
 .cmd-send{font-family:inherit;font-size:12px;font-weight:500;padding:4px 12px;border-radius:6px;cursor:pointer;border:1px solid var(--brd);background:var(--sur);color:var(--txt);transition:all .15s;flex-shrink:0}
-.cmd-send:hover{background:#4f46e5;border-color:#4f46e5;color:#e0e7ff}
+.cmd-send:hover{background:var(--acc2);border-color:var(--acc2);color:var(--bg)}
 .stats-bar{display:flex;align-items:center;gap:0;flex:1;justify-content:center}
 .stat-group{display:flex;align-items:center;gap:10px;padding:0 24px;border-right:1px solid #2d3a52}
 .stat-group:last-child{border-right:none}
@@ -3868,7 +6143,7 @@ header{background:rgba(17,24,39,.95);border-bottom:1px solid var(--brd);padding:
 </head>
 <body>
 <header>
-  <div class="logo"><div class="lm"><img src="https://media.lordicon.com/icons/wired/gradient/53-location-pin-on-round-map.svg" width="28" height="28" style="object-fit:contain"></div>Konsola – SAFE CLOUD</div>
+  <div class="logo"><div class="lm"><svg viewBox="0 0 38 22" width="22" height="13" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z" stroke="var(--acc)" stroke-width="1.6" stroke-linejoin="round" fill="rgba(129,140,248,0.08)"/><path d="M11 8.5a3.5 3.5 0 012.2-3.2" stroke="var(--acc)" stroke-width="1.1" stroke-linecap="round" opacity=".3"/></svg></div>Konsola – SAFE CLOUD</div>
   <div class="stats-bar">
     <div class="stat-group">
       <div class="stat">RAM &ndash; <span class="stat-val" id="st-ram">&mdash;</span></div>
@@ -3884,6 +6159,11 @@ header{background:rgba(17,24,39,.95);border-bottom:1px solid var(--brd);padding:
       <div class="stat">Dysk In &ndash; <span class="stat-val" id="st-dr">&mdash;</span></div>
       <span class="stat-inner-sep">&middot;</span>
       <div class="stat">Dysk Out &ndash; <span class="stat-val" id="st-dw">&mdash;</span></div>
+    </div>
+    <div class="stat-group">
+      <div class="stat">Net &#x2191; &ndash; <span class="stat-val" id="st-nup">&mdash;</span></div>
+      <span class="stat-inner-sep">&middot;</span>
+      <div class="stat">Net &#x2193; &ndash; <span class="stat-val" id="st-ndw">&mdash;</span></div>
     </div>
     <div class="stat-group">
       <div class="stat">Cache &ndash; <span class="stat-val" id="st-cache">&mdash;</span></div>
@@ -4080,6 +6360,8 @@ async function fetchStats(){
       document.getElementById('st-con').textContent=d.conns;
       document.getElementById('st-dr').textContent=d.disk_r||'—';
       document.getElementById('st-dw').textContent=d.disk_w||'—';
+      document.getElementById('st-nup').textContent=d.net_up||'—';
+      document.getElementById('st-ndw').textContent=d.net_down||'—';
       document.getElementById('st-cache').textContent=d.cache;
       document.getElementById('st-ses').textContent=d.sessions;
     }
@@ -4089,6 +6371,7 @@ fetchStats();
 setInterval(fetchStats,3000);
 connect();
 </script>
+""" + BG_ANIMATION_JS + """
 </body>
 </html>"""
 
@@ -4141,13 +6424,55 @@ CONSOLE_LOGIN_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <title>Konsola – logowanie</title>
-<link rel="icon" type="image/svg+xml" href="https://media.lordicon.com/icons/wired/gradient/53-location-pin-on-round-map.svg">
+<link rel="icon" id="dyn-favicon" type="image/svg+xml" href="">
+<script>
+(function(){
+  function makeFavicon(){
+    var acc=getComputedStyle(document.documentElement).getPropertyValue('--acc').trim()||'#e2e8f0';
+    var svg='<svg viewBox="0 0 38 22" xmlns="http://www.w3.org/2000/svg"><path d="M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z" stroke="'+acc+'" stroke-width="1.6" stroke-linejoin="round" fill="'+acc+'22"/><path d="M11 8.5a3.5 3.5 0 012.2-3.2" stroke="'+acc+'" stroke-width="1.1" stroke-linecap="round" opacity=".4"/></svg>';
+    var el=document.getElementById('dyn-favicon');
+    if(el) el.href='data:image/svg+xml,'+encodeURIComponent(svg);
+  }
+  function init(){
+    makeFavicon();
+    new MutationObserver(makeFavicon).observe(document.documentElement,{attributes:true,attributeFilter:['style','class']});
+  }
+  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}
+})();
+</script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Audiowide&display=swap" rel="stylesheet">
+
+<script>
+(function(){
+  try{
+    var _s=JSON.parse(localStorage.getItem('sc_theme')||'null');
+    if(!_s) return;
+    var _DK={'Niebieski':{acc:'#818cf8',acc2:'#4f46e5',bg:'#0a0c14',sur:'#111827',brd:'#1e2535',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(79,70,229,.55)',gr2:'rgba(109,40,217,.30)',gr3:'rgba(67,56,202,.28)',gr4:'rgba(124,58,237,.20)'},'Zielony':{acc:'#34d399',acc2:'#059669',bg:'#091410',sur:'#0f1f1a',brd:'#1a3028',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(5,150,105,.50)',gr2:'rgba(4,120,87,.28)',gr3:'rgba(6,95,70,.25)',gr4:'rgba(20,83,45,.18)'},'Czerwony':{acc:'#f87171',acc2:'#dc2626',bg:'#110a0a',sur:'#1e1010',brd:'#2e1a1a',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(220,38,38,.50)',gr2:'rgba(185,28,28,.28)',gr3:'rgba(153,27,27,.25)',gr4:'rgba(127,29,29,.18)'},'Fioletowy':{acc:'#c084fc',acc2:'#9333ea',bg:'#0d0a14',sur:'#180f27',brd:'#2a1a40',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(147,51,234,.55)',gr2:'rgba(126,34,206,.30)',gr3:'rgba(107,33,168,.28)',gr4:'rgba(88,28,135,.20)'},'Mono':{acc:'#e2e8f0',acc2:'#94a3b8',bg:'#09090b',sur:'#18181b',brd:'#27272a',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(148,163,184,.22)',gr2:'rgba(100,116,139,.12)',gr3:'rgba(71,85,105,.10)',gr4:'rgba(51,65,85,.08)'},'Różowy':{acc:'#f472b6',acc2:'#db2777',bg:'#11080d',sur:'#1e0f18',brd:'#2e1a26',txt:'#e6edf3',muted:'#7d8590',gr1:'rgba(219,39,119,.50)',gr2:'rgba(190,24,93,.28)',gr3:'rgba(157,23,77,.25)',gr4:'rgba(131,24,67,.18)'}};
+    var _LT={'Niebieski':{acc:'#4f46e5',acc2:'#3730a3',bg:'#f0f2ff',sur:'#ffffff',brd:'#dde1f0',txt:'#1a1f36',muted:'#6b7280',gr1:'rgba(79,70,229,.12)',gr2:'rgba(109,40,217,.07)',gr3:'rgba(67,56,202,.06)',gr4:'rgba(124,58,237,.05)'},'Zielony':{acc:'#059669',acc2:'#047857',bg:'#f0faf6',sur:'#ffffff',brd:'#d1f0e6',txt:'#0f2a1f',muted:'#6b7280',gr1:'rgba(5,150,105,.10)',gr2:'rgba(4,120,87,.06)',gr3:'rgba(6,95,70,.05)',gr4:'rgba(20,83,45,.04)'},'Czerwony':{acc:'#dc2626',acc2:'#b91c1c',bg:'#fff0f0',sur:'#ffffff',brd:'#f0d5d5',txt:'#2a0a0a',muted:'#6b7280',gr1:'rgba(220,38,38,.10)',gr2:'rgba(185,28,28,.06)',gr3:'rgba(153,27,27,.05)',gr4:'rgba(127,29,29,.04)'},'Fioletowy':{acc:'#9333ea',acc2:'#7c3aed',bg:'#f5f0ff',sur:'#ffffff',brd:'#e2d5f5',txt:'#1a0a2e',muted:'#6b7280',gr1:'rgba(147,51,234,.10)',gr2:'rgba(126,34,206,.06)',gr3:'rgba(107,33,168,.05)',gr4:'rgba(88,28,135,.04)'},'Mono':{acc:'#334155',acc2:'#1e293b',bg:'#f8fafc',sur:'#ffffff',brd:'#e2e8f0',txt:'#0f172a',muted:'#64748b',gr1:'rgba(148,163,184,.15)',gr2:'rgba(100,116,139,.08)',gr3:'rgba(71,85,105,.06)',gr4:'rgba(51,65,85,.04)'},'Różowy':{acc:'#db2777',acc2:'#be185d',bg:'#fff0f7',sur:'#ffffff',brd:'#f0d5e8',txt:'#2a0a18',muted:'#6b7280',gr1:'rgba(219,39,119,.10)',gr2:'rgba(190,24,93,.06)',gr3:'rgba(157,23,77,.05)',gr4:'rgba(131,24,67,.04)'}};
+    var _mode=_s.mode||'dark', _name=_s.name||'Mono';
+    var t=(_mode==='light'?_LT:_DK)[_name]||(_mode==='light'?_LT:_DK)['Mono'];
+    var r=document.documentElement;
+    r.style.setProperty('--acc',  t.acc);
+    r.style.setProperty('--acc2', t.acc2);
+    r.style.setProperty('--bg',   t.bg);
+    r.style.setProperty('--sur',  t.sur);
+    r.style.setProperty('--brd',  t.brd);
+    r.style.setProperty('--txt',  t.txt||'#e6edf3');
+    r.style.setProperty('--muted',t.muted||'#7d8590');
+    r.style.setProperty('--gr1',  t.gr1);
+    r.style.setProperty('--gr2',  t.gr2);
+    r.style.setProperty('--gr3',  t.gr3);
+    r.style.setProperty('--gr4',  t.gr4);
+    r.classList.toggle('theme-mono', _name==='Mono');
+    r.classList.toggle('theme-light', _mode==='light');
+  }catch(e){}
+})();
+</script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-:root{--bg:#0a0c14;--sur:#111827;--brd:#1e2535;--txt:#e6edf3;--muted:#7d8590;--acc:#818cf8;--acc2:#4f46e5;--red:#f85149}
-body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--txt);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background-image:radial-gradient(ellipse 160% 120% at 50% -10%,rgba(79,70,229,.55) 0%,rgba(109,40,217,.30) 38%,transparent 65%)}
-.card{background:var(--sur);border:1px solid var(--brd);border-radius:16px;padding:36px 32px;width:100%;max-width:360px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+:root{--bg:#09090b;--sur:#18181b;--brd:#27272a;--txt:#e6edf3;--muted:#7d8590;--acc:#e2e8f0;--acc2:#94a3b8;--red:#f85149}
+body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--txt);min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background-image:none}
+.card{background:var(--sur);border:1px solid var(--brd);border-radius:16px;padding:36px 32px;width:100%;max-width:360px;box-shadow:0 20px 60px rgba(0,0,0,.5);position:relative;z-index:1}
 .logo{display:flex;align-items:center;justify-content:center;gap:10px;font-weight:700;font-size:18px;margin-bottom:8px;font-family:'Audiowide',sans-serif;letter-spacing:.04em}
 .sub{text-align:center;font-size:12px;color:var(--muted);margin-bottom:28px}
 label{display:block;font-size:12px;font-weight:500;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em}
@@ -4160,7 +6485,7 @@ input:focus{border-color:var(--acc)}
 </head>
 <body>
 <div class="card">
-  <div class="logo"><img src="https://media.lordicon.com/icons/wired/gradient/53-location-pin-on-round-map.svg" width="30" height="30">SAFE CLOUD</div>
+  <div class="logo"><svg viewBox="0 0 38 22" width="22" height="13" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M30 17H9a5 5 0 01-.6-10 7 7 0 0113.5-2A4 4 0 0130 8.5a4.25 4.25 0 010 8.5z" stroke="var(--acc)" stroke-width="1.6" stroke-linejoin="round" fill="rgba(129,140,248,0.08)"/><path d="M11 8.5a3.5 3.5 0 012.2-3.2" stroke="var(--acc)" stroke-width="1.1" stroke-linecap="round" opacity=".3"/></svg>SAFE CLOUD</div>
   <div class="sub">Konsola administracyjna</div>
   <div class="err">%%ERRMSG%%</div>
   <form method="POST" action="/login">
@@ -4171,6 +6496,7 @@ input:focus{border-color:var(--acc)}
     <button class="submit" type="submit">Zaloguj się</button>
   </form>
 </div>
+""" + BG_ANIMATION_JS + """
 </body>
 </html>"""
 
@@ -4280,14 +6606,19 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             uname = data.get("username", "").strip()
             pw    = data.get("password", "")
             users = load_users()
-            if uname in users and get_user_password(users, uname) == hash_password(pw):
-                if is_admin(uname) or is_owner(uname):
-                    token = create_console_session(uname)
-                    self.send_response(302)
-                    self.send_header("Set-Cookie", self._set_cookie(token))
-                    self.send_header("Location", "/")
-                    self.end_headers()
-                    return
+            stored_con = get_user_password(users, uname) if uname in users else None
+            ok_con, new_hash_con = verify_password(pw, stored_con) if stored_con else (False, None)
+            if ok_con and (is_admin(uname) or is_owner(uname)):
+                if new_hash_con:
+                    if isinstance(users[uname], dict): users[uname]["password"] = new_hash_con
+                    else: users[uname] = {"password": new_hash_con, "role": None}
+                    save_users(users)
+                token = create_console_session(uname)
+                self.send_response(302)
+                self.send_header("Set-Cookie", self._set_cookie(token))
+                self.send_header("Location", "/")
+                self.end_headers()
+                return
             page = CONSOLE_LOGIN_HTML.replace("%%ERR%%","block").replace("%%ERRMSG%%","Nieprawidłowe dane lub brak uprawnień.")
             self._send_html(page)
             return
@@ -4308,7 +6639,68 @@ if __name__ == "__main__":
     rl = threading.Thread(target=ram_limiter, daemon=True)
     rl.start()
 
+    # ── AUTO BACKUP ───────────────────────────────────
+    ab = threading.Thread(target=auto_backup_loop, daemon=True)
+    ab.start()
+    print(f"[BACKUP] Autobackup włączony — co {BACKUP_INTERVAL//3600}h, max {BACKUP_MAX_KEEP} kopii w ./backups/")
+    # ──────────────────────────────────────────────────
+    def start_cloudflared():
+        import subprocess, psutil as _psu, shutil, os as _os
+        # Sprawdź czy cloudflared już działa
+        for p in _psu.process_iter(['name']):
+            if 'cloudflared' in p.info['name'].lower():
+                print(f"[CLOUDFLARED] Już działa (PID {p.pid})")
+                return
+        # Znajdź cloudflared — najpierw w PATH, potem w typowych lokalizacjach
+        cfd_exe = shutil.which("cloudflared") or shutil.which("cloudflared.exe")
+        if not cfd_exe and sys.platform == "win32":
+            candidates = [
+                _os.path.expandvars(r"%ProgramFiles%\cloudflared\cloudflared.exe"),
+                _os.path.expandvars(r"%LocalAppData%\cloudflared\cloudflared.exe"),
+                _os.path.expandvars(r"%LocalAppData%\Microsoft\WinGet\Packages\Cloudflare.cloudflared_Microsoft.Winget.Source_8wekyb3d8bbwe\cloudflared.exe"),
+                r"C:\Program Files\cloudflared\cloudflared.exe",
+                r"C:\ProgramData\chocolatey\bin\cloudflared.exe",
+                _os.path.join(_os.path.expanduser("~"), "cloudflared.exe"),
+                _os.path.join(_os.path.expanduser("~"), "Downloads", "cloudflared.exe"),
+                _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "cloudflared.exe"),
+            ]
+            for c in candidates:
+                if _os.path.isfile(c):
+                    cfd_exe = c
+                    break
+        if not cfd_exe:
+            print("[CLOUDFLARED] ✗ Nie znaleziono cloudflared — umieść cloudflared.exe w tym samym folderze co StartUp.py")
+            return
+        # Uruchom cloudflared
+        try:
+            cmd = [cfd_exe, "tunnel", "run", "--url", f"http://127.0.0.1:{PORT}", "safecloud"]
+            if sys.platform == "win32":
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+            else:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True
+                )
+            print(f"[CLOUDFLARED] Uruchomiono (PID {proc.pid}) — {cfd_exe}")
+        except Exception as e:
+            print(f"[CLOUDFLARED] ✗ Błąd uruchomienia: {e}")
 
+    import sys as _sys_cf
+    import sys
+    try:
+        import psutil as _check_psu
+        cfd_thread = threading.Thread(target=start_cloudflared, daemon=True)
+        cfd_thread.start()
+    except ImportError:
+        print("[CLOUDFLARED] ✗ Brak psutil — nie można sprawdzić czy cloudflared działa")
+    # ──────────────────────────────────────────────────────
 
     socketserver.TCPServer.allow_reuse_address = True
     con_srv = socketserver.ThreadingTCPServer((HOST, CONSOLE_PORT), ConsoleHandler)
